@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -5,6 +6,11 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+# Hide CUDA devices before torch/accelerate/pynvml are imported.
+# Prevents "Found no NVIDIA driver" on CPU-only hosts (e.g. Streamlit Cloud).
+# Users with a GPU should set CUDA_VISIBLE_DEVICES=0 in their environment to override.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 import streamlit as st
 

@@ -14,16 +14,31 @@ from .config import settings
 # ==========================================
 
 def _resolve_device(device: int) -> str:
-    if device >= 0 and torch.cuda.is_available():
-        return f"cuda:{device}"
+    if device < 0:
+        return "cpu"
+    try:
+        if torch.cuda.is_available():
+            return f"cuda:{device}"
+    except Exception:
+        pass
     return "cpu"
 
 
 @lru_cache(maxsize=1)
-def get_embeddings():
+def get_embeddings() -> HuggingFaceEmbeddings:
+    device = _resolve_device(settings.hf_device)
+    if device != "cpu":
+        try:
+            return HuggingFaceEmbeddings(
+                model_name=settings.embedding_model,
+                model_kwargs={"device": device},
+                encode_kwargs={"normalize_embeddings": True},
+            )
+        except Exception:
+            pass  # fallback to CPU below
     return HuggingFaceEmbeddings(
         model_name=settings.embedding_model,
-        model_kwargs={"device": _resolve_device(settings.hf_device)},
+        model_kwargs={"device": "cpu"},
         encode_kwargs={"normalize_embeddings": True},
     )
 
