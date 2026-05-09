@@ -14,10 +14,7 @@ qdrant-client>=1.11
 # Embeddings & LLM backends
 sentence-transformers>=3.0
 transformers>=4.45
-# CPU-only torch: Streamlit Cloud has no GPU; CPU wheel keeps torch.cuda.is_available()=False
-# so accelerate skips pynvml and avoids "Found no NVIDIA driver" on upload.
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.6.0+cpu
+torch>=2.0
 
 # Template rendering
 jinja2>=3.1
