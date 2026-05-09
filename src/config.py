@@ -19,11 +19,11 @@ class Settings(BaseSettings):
     
     embedding_model: str = "GreenNode/GreenNode-Embedding-Large-VN-Mixed-V1"
     
-    llm_provider: Literal["hf_local", "gemini", "vllm"] = "hf_local"
+    llm_provider: Literal["hf_local", "gemini", "vllm"] = "gemini"
     llm_temperature: float = Field(default=0.1, ge=0.0, le=2.0)
-    
+
     hf_model: str = "/mnt/pretrained_fm/Qwen_Qwen3-4B-Instruct-2507"
-    hf_device: int = 1
+    hf_device: int = -1
     hf_max_new_tokens: int = Field(default=2048, ge=1)
     
     gemini_model: str = "gemini-2.5-flash"
