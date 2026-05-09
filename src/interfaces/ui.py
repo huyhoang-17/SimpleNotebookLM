@@ -6,12 +6,12 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-import httpx
 import streamlit as st
 
-from src.config import settings
-
-_API = settings.api_url
+from src.indexing import save_and_ingest_pdf
+from src.learning import generate_flashcards, generate_quiz
+from src.learning import summarize as summarize_learning
+from src.rag import answer, fetch_all_chunks
 
 GLOBAL_CSS = """
 <style>
@@ -22,12 +22,21 @@ GLOBAL_CSS = """
 """
 
 
-def _api(method: str, path: str, **kwargs):
-    return httpx.request(method, f"{_API}{path}", timeout=120, **kwargs)
+def _list_documents() -> list[dict]:
+    try:
+        chunks = fetch_all_chunks()
+    except Exception:
+        return []
+    seen: dict[str, str] = {}
+    for chunk in chunks:
+        doc_id = chunk.metadata.document_id
+        if doc_id not in seen:
+            seen[doc_id] = chunk.metadata.filename
+    return [{"document_id": k, "filename": v} for k, v in seen.items()]
 
 
 def _build_filters(filenames: list[str], page: int | None) -> dict | None:
-    f = {}
+    f: dict = {}
     if filenames:
         f["filenames"] = filenames
     if page is not None:
@@ -38,12 +47,7 @@ def _build_filters(filenames: list[str], page: int | None) -> dict | None:
 def _sidebar() -> tuple[list[str], int | None]:
     st.sidebar.title("Bộ lọc")
 
-    try:
-        resp = _api("GET", "/documents")
-        docs = resp.json() if resp.status_code == 200 else []
-    except Exception:
-        docs = []
-
+    docs = _list_documents()
     filenames = [d["filename"] for d in docs]
     selected = st.sidebar.multiselect("Chọn tài liệu", filenames)
 
@@ -54,17 +58,13 @@ def _sidebar() -> tuple[list[str], int | None]:
     st.sidebar.subheader("Tải tài liệu lên")
     uploaded = st.sidebar.file_uploader("Chọn file PDF", type=["pdf"])
     if uploaded and st.sidebar.button("Tải lên"):
-        with st.sidebar.spinner("Đang tải lên..."):
-            resp = _api(
-                "POST", "/upload",
-                files={"file": (uploaded.name, uploaded.getvalue(), "application/pdf")},
-            )
-        if resp.status_code == 200:
-            data = resp.json()
-            st.sidebar.success(f"Đã index {data.get('chunks_indexed', 0)} chunks")
-            st.rerun()
-        else:
-            st.sidebar.error("Tải lên thất bại")
+        with st.sidebar.spinner("Đang tải lên và index..."):
+            try:
+                result = save_and_ingest_pdf(uploaded.getvalue(), uploaded.name)
+                st.sidebar.success(f"Đã index {result['chunks_indexed']} chunks")
+                st.rerun()
+            except Exception as e:
+                st.sidebar.error(f"Tải lên thất bại: {e}")
 
     return selected, page
 
@@ -76,18 +76,15 @@ def _tab_chat(filenames: list[str], page: int | None) -> None:
 
     if st.button("Hỏi", key="btn_ask") and question:
         with st.spinner("Đang trả lời..."):
-            payload = {"question": question, "k": k, "filters": _build_filters(filenames, page)}
-            resp = _api("POST", "/ask", json=payload)
-
-        if resp.status_code == 200:
-            data = resp.json()
-            st.markdown(data["answer"])
-            if data.get("citations"):
-                with st.expander("Nguồn trích dẫn"):
-                    for c in data["citations"]:
-                        st.write(f"**{c['source_marker']}**: {c['filename']}, trang {c['page']}")
-        else:
-            st.error(f"Lỗi {resp.status_code}: {resp.text}")
+            try:
+                result = answer(question, k=k, filters=_build_filters(filenames, page))
+                st.markdown(result.answer)
+                if result.citations:
+                    with st.expander("Nguồn trích dẫn"):
+                        for c in result.citations:
+                            st.write(f"**{c.source_marker}**: {c.filename}, trang {c.page}")
+            except Exception as e:
+                st.error(f"Lỗi: {e}")
 
 
 def _tab_summary(filenames: list[str], page: int | None) -> None:
@@ -96,25 +93,22 @@ def _tab_summary(filenames: list[str], page: int | None) -> None:
 
     if st.button("Tóm tắt", key="btn_summary"):
         with st.spinner("Đang tóm tắt..."):
-            payload = {
-                "query": query or None,
-                "filters": _build_filters(filenames, page),
-            }
-            resp = _api("POST", "/summarize", json=payload)
-
-        if resp.status_code == 200:
-            data = resp.json()
-            st.markdown(data["summary"])
-            if data.get("key_points"):
-                st.subheader("Điểm chính")
-                for kp in data["key_points"]:
-                    st.markdown(f"- {kp}")
-            if data.get("citations"):
-                with st.expander("Nguồn"):
-                    for c in data["citations"]:
-                        st.write(f"**{c['source_marker']}**: {c['filename']}, trang {c['page']}")
-        else:
-            st.error(f"Lỗi {resp.status_code}: {resp.text}")
+            try:
+                result = summarize_learning(
+                    query=query or None,
+                    filters=_build_filters(filenames, page),
+                )
+                st.markdown(result.summary)
+                if result.key_points:
+                    st.subheader("Điểm chính")
+                    for kp in result.key_points:
+                        st.markdown(f"- {kp}")
+                if result.citations:
+                    with st.expander("Nguồn"):
+                        for c in result.citations:
+                            st.write(f"**{c.source_marker}**: {c.filename}, trang {c.page}")
+            except Exception as e:
+                st.error(f"Lỗi: {e}")
 
 
 def _tab_quiz(filenames: list[str], page: int | None) -> None:
@@ -124,30 +118,33 @@ def _tab_quiz(filenames: list[str], page: int | None) -> None:
 
     if st.button("Tạo Quiz", key="btn_quiz"):
         with st.spinner("Đang tạo quiz..."):
-            payload = {
-                "query": query or None,
-                "count": count,
-                "filters": _build_filters(filenames, page),
-            }
-            resp = _api("POST", "/quiz", json=payload)
-        st.session_state["quiz_data"] = resp.json() if resp.status_code == 200 else None
-        st.session_state["quiz_answers"] = {}
+            try:
+                result = generate_quiz(
+                    query=query or None,
+                    count=count,
+                    filters=_build_filters(filenames, page),
+                )
+                st.session_state["quiz_data"] = result
+            except Exception as e:
+                st.error(f"Lỗi: {e}")
+                st.session_state["quiz_data"] = None
+            st.session_state["quiz_answers"] = {}
 
-    quiz_data = st.session_state.get("quiz_data")
-    if quiz_data:
-        for i, item in enumerate(quiz_data.get("items", []), 1):
-            st.subheader(f"Câu {i}: {item['question']}")
+    quiz_result = st.session_state.get("quiz_data")
+    if quiz_result:
+        for i, item in enumerate(quiz_result.items, 1):
+            st.subheader(f"Câu {i}: {item.question}")
             choice = st.radio(
-                "Chọn đáp án:", item["options"],
+                "Chọn đáp án:", item.options,
                 key=f"quiz_q{i}", index=None,
             )
             if choice is not None and st.button(f"Kiểm tra câu {i}", key=f"check_{i}"):
-                idx = item["options"].index(choice)
-                if idx == item["correct_index"]:
+                idx = item.options.index(choice)
+                if idx == item.correct_index:
                     st.success("Đúng!")
                 else:
-                    st.error(f"Sai. Đáp án đúng: {item['options'][item['correct_index']]}")
-                st.info(f"Giải thích: {item['explanation']}")
+                    st.error(f"Sai. Đáp án đúng: {item.options[item.correct_index]}")
+                st.info(f"Giải thích: {item.explanation}")
 
 
 def _tab_flashcards(filenames: list[str], page: int | None) -> None:
@@ -157,18 +154,17 @@ def _tab_flashcards(filenames: list[str], page: int | None) -> None:
 
     if st.button("Tạo Flashcards", key="btn_fc"):
         with st.spinner("Đang tạo flashcards..."):
-            payload = {
-                "query": query or None,
-                "count": count,
-                "filters": _build_filters(filenames, page),
-            }
-            resp = _api("POST", "/flashcards", json=payload)
-        if resp.status_code == 200:
-            st.session_state["fc_cards"] = resp.json().get("cards", [])
-            st.session_state["fc_index"] = 0
-            st.session_state["fc_show_back"] = False
-        else:
-            st.error(f"Lỗi {resp.status_code}: {resp.text}")
+            try:
+                result = generate_flashcards(
+                    query=query or None,
+                    count=count,
+                    filters=_build_filters(filenames, page),
+                )
+                st.session_state["fc_cards"] = result.cards
+                st.session_state["fc_index"] = 0
+                st.session_state["fc_show_back"] = False
+            except Exception as e:
+                st.error(f"Lỗi: {e}")
 
     cards = st.session_state.get("fc_cards", [])
     if cards:
@@ -176,15 +172,15 @@ def _tab_flashcards(filenames: list[str], page: int | None) -> None:
         card = cards[idx]
 
         st.markdown(f"### Thẻ {idx + 1} / {len(cards)}")
-        st.markdown(f"**Câu hỏi:** {card['front']}")
+        st.markdown(f"**Câu hỏi:** {card.front}")
 
         if st.button("Lật thẻ", key="fc_flip"):
             st.session_state["fc_show_back"] = not st.session_state.get("fc_show_back", False)
 
         if st.session_state.get("fc_show_back"):
-            st.success(f"**Trả lời:** {card['back']}")
-            if card.get("hint"):
-                st.caption(f"Gợi ý: {card['hint']}")
+            st.success(f"**Trả lời:** {card.back}")
+            if card.hint:
+                st.caption(f"Gợi ý: {card.hint}")
 
         col1, col2 = st.columns(2)
         with col1:
