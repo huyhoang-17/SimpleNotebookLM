@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+import torch
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
@@ -12,15 +13,17 @@ from .config import settings
 # Cấu hình Embedding và Qdrant Client (Trang 13)
 # ==========================================
 
-def _device_str(device: int) -> str:
-    return "cpu" if device < 0 else f"cuda:{device}"
+def _resolve_device(device: int) -> str:
+    if device >= 0 and torch.cuda.is_available():
+        return f"cuda:{device}"
+    return "cpu"
 
 
 @lru_cache(maxsize=1)
 def get_embeddings():
     return HuggingFaceEmbeddings(
         model_name=settings.embedding_model,
-        model_kwargs={"device": _device_str(settings.hf_device)},
+        model_kwargs={"device": _resolve_device(settings.hf_device)},
         encode_kwargs={"normalize_embeddings": True},
     )
 
