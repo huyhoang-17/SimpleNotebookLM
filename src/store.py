@@ -12,11 +12,15 @@ from .config import settings
 # Cấu hình Embedding và Qdrant Client (Trang 13)
 # ==========================================
 
+def _device_str(device: int) -> str:
+    return "cpu" if device < 0 else f"cuda:{device}"
+
+
 @lru_cache(maxsize=1)
 def get_embeddings():
     return HuggingFaceEmbeddings(
         model_name=settings.embedding_model,
-        model_kwargs={"device": settings.hf_device},
+        model_kwargs={"device": _device_str(settings.hf_device)},
         encode_kwargs={"normalize_embeddings": True},
     )
 
