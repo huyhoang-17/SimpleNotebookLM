@@ -1,6 +1,5 @@
 from functools import lru_cache
 
-import torch
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
@@ -17,6 +16,7 @@ def _resolve_device(device: int) -> str:
     if device < 0:
         return "cpu"
     try:
+        import torch
         if torch.cuda.is_available():
             return f"cuda:{device}"
     except Exception:
