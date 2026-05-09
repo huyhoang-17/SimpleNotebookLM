@@ -1,0 +1,19 @@
+Kết hợp các tóm tắt sau thành một tóm tắt tổng hợp toàn diện. Trả về JSON hợp lệ (không có văn bản nào khác).
+
+**Các tóm tắt thành phần:**
+{% for partial in partials %}
+--- Phần {{ loop.index }} ---
+Tóm tắt: {{ partial.summary }}
+Điểm chính: {{ partial.key_points | join(" | ") }}
+
+{% endfor %}
+
+Trả về JSON:
+{
+  "summary": "Tóm tắt tổng hợp đầy đủ, mạch lạc bằng tiếng Việt (4-6 câu)",
+  "key_points": [
+    "Điểm chính tổng hợp 1",
+    "Điểm chính tổng hợp 2",
+    "Điểm chính tổng hợp 3"
+  ]
+}

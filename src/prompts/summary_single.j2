@@ -1,0 +1,18 @@
+Bạn là một trợ lý học tập. Hãy tóm tắt các đoạn văn bản sau và trả về kết quả dưới dạng JSON hợp lệ.
+
+**Văn bản cần tóm tắt:**
+{% for chunk in chunks %}
+[S{{ loop.index }}] ({{ chunk.metadata.filename }}, trang {{ chunk.metadata.page }})
+{{ chunk.text }}
+
+{% endfor %}
+
+Trả về JSON với cấu trúc sau (không có văn bản nào khác ngoài JSON):
+{
+  "summary": "Tóm tắt đầy đủ, mạch lạc bằng tiếng Việt (3-5 câu)",
+  "key_points": [
+    "Điểm chính thứ nhất",
+    "Điểm chính thứ hai",
+    "Điểm chính thứ ba"
+  ]
+}

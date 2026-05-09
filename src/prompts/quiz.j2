@@ -1,0 +1,35 @@
+Dựa trên các đoạn văn bản sau, hãy tạo đúng {{ count }} câu hỏi trắc nghiệm. Trả về JSON hợp lệ (không có văn bản nào khác).
+
+**Tài liệu tham khảo:**
+{% for chunk in chunks %}
+[S{{ loop.index }}] ({{ chunk.metadata.filename }}, trang {{ chunk.metadata.page }})
+{{ chunk.text }}
+
+{% endfor %}
+
+Trả về JSON với cấu trúc sau:
+{
+  "items": [
+    {
+      "question": "Câu hỏi rõ ràng, cụ thể",
+      "options": [
+        "A. Lựa chọn đầu tiên",
+        "B. Lựa chọn thứ hai",
+        "C. Lựa chọn thứ ba",
+        "D. Lựa chọn thứ tư"
+      ],
+      "correct_index": 0,
+      "explanation": "Giải thích tại sao đáp án này đúng và các đáp án kia sai",
+      "source_markers": ["S1"],
+      "difficulty": "easy",
+      "topic": "Chủ đề câu hỏi"
+    }
+  ]
+}
+
+Lưu ý:
+- correct_index là số nguyên từ 0 đến 3 (0=A, 1=B, 2=C, 3=D)
+- Mỗi câu hỏi phải có đúng 4 lựa chọn
+- difficulty: "easy", "medium", hoặc "hard"
+- source_markers: danh sách các nguồn [S1], [S2], ... được sử dụng
+- Tạo đúng {{ count }} câu hỏi

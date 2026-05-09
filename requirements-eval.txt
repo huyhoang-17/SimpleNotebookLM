@@ -1,0 +1,16 @@
+# Evaluation dependencies (optional — only needed for benchmarking)
+#
+# PREREQUISITES on Windows:
+#   ragas pulls in scikit-network which requires Cython compilation.
+#   You need Microsoft C++ Build Tools installed:
+#   https://visualstudio.microsoft.com/visual-cpp-build-tools/
+#   (chọn "Desktop development with C++" trong installer)
+#
+# Alternatively, use Python 3.11 or 3.12 which have pre-built wheels
+# for scikit-network on Windows.
+#
+# Install: pip install -r requirements-eval.txt
+
+ragas>=0.2
+datasets>=3.0
+pandas>=2.0

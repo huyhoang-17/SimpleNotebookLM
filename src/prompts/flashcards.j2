@@ -1,0 +1,28 @@
+Dựa trên các đoạn văn bản sau, hãy tạo đúng {{ count }} flashcard học tập. Trả về JSON hợp lệ (không có văn bản nào khác).
+
+**Tài liệu tham khảo:**
+{% for chunk in chunks %}
+[S{{ loop.index }}] ({{ chunk.metadata.filename }}, trang {{ chunk.metadata.page }})
+{{ chunk.text }}
+
+{% endfor %}
+
+Trả về JSON với cấu trúc sau:
+{
+  "cards": [
+    {
+      "front": "Câu hỏi hoặc khái niệm cần học (ngắn gọn)",
+      "back": "Câu trả lời hoặc định nghĩa đầy đủ, chính xác",
+      "hint": "Gợi ý nhỏ giúp nhớ (tùy chọn, có thể null)",
+      "topic": "Chủ đề hoặc lĩnh vực",
+      "source_markers": ["S1"]
+    }
+  ]
+}
+
+Lưu ý:
+- front: ngắn gọn, dạng câu hỏi hoặc từ/cụm từ cần nhớ
+- back: trả lời đầy đủ, có thể dài hơn
+- hint: gợi ý ngắn, hoặc null nếu không cần
+- source_markers: danh sách các nguồn [S1], [S2], ... được sử dụng
+- Tạo đúng {{ count }} flashcard

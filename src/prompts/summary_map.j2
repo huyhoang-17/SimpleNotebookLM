@@ -1,0 +1,13 @@
+Tóm tắt ngắn gọn các đoạn văn bản sau. Trả về JSON hợp lệ (không có văn bản nào khác).
+
+**Đoạn văn bản:**
+{% for chunk in chunks %}
+[S{{ loop.index }}] {{ chunk.text }}
+
+{% endfor %}
+
+Trả về JSON:
+{
+  "summary": "Tóm tắt ngắn gọn bằng tiếng Việt (2-3 câu)",
+  "key_points": ["Điểm 1", "Điểm 2"]
+}
