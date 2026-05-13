@@ -156,6 +156,55 @@ def _tab_quiz(filenames: list[str], page: int | None) -> None:
                 st.info(f"Giải thích: {item.explanation}")
 
 
+_GUIDE_PATH = Path(__file__).resolve().parent.parent / "docs" / "user_guide.md"
+_GUIDE_TRIGGERS = (
+    "hướng dẫn sử dụng notebook",
+    "hướng dẫn sử dụng",
+    "hướng dẫn dùng",
+    "cách sử dụng",
+    "cách dùng",
+    "hướng dẫn",
+    "guide",
+    "help",
+)
+
+
+def _load_user_guide() -> str:
+    try:
+        return _GUIDE_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return "_Tài liệu hướng dẫn chưa được tạo._"
+
+
+def _is_guide_request(text: str) -> bool:
+    t = text.strip().lower()
+    if not t:
+        return False
+    return any(trigger in t for trigger in _GUIDE_TRIGGERS)
+
+
+def _tab_guide() -> None:
+    st.header("Hướng dẫn sử dụng")
+    guide_md = _load_user_guide()
+    st.markdown(guide_md)
+
+    st.markdown("---")
+    st.subheader("Hỏi nhanh về cách dùng")
+    user_q = st.text_input(
+        "Nhập câu hỏi về cách sử dụng (ví dụ: 'hướng dẫn sử dụng notebook')",
+        key="guide_chat_input",
+    )
+    if st.button("Gửi", key="btn_guide_ask") and user_q:
+        if _is_guide_request(user_q):
+            st.markdown(guide_md)
+        else:
+            st.info(
+                "Tôi chỉ trả lời các câu hỏi về cách sử dụng ứng dụng ở tab này. "
+                "Hãy thử gõ \"hướng dẫn sử dụng notebook\". "
+                "Nếu bạn muốn hỏi về nội dung tài liệu, vui lòng dùng tab **Hỏi đáp**."
+            )
+
+
 def _tab_flashcards(filenames: list[str], page: int | None) -> None:
     st.header("Flashcards")
     query = st.text_input("Chủ đề flashcard (để trống = từ toàn bộ tài liệu)")
@@ -209,11 +258,18 @@ def run():
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
     filenames, page = _sidebar()
-    tabs = st.tabs(["Hỏi đáp", "Tóm tắt", "Quiz", "Flashcards"])
+    tabs = st.tabs(["Hỏi đáp", "Tóm tắt", "Quiz", "Flashcards", "Hướng dẫn"])
 
-    for tab, fn in zip(tabs, [_tab_chat, _tab_summary, _tab_quiz, _tab_flashcards]):
-        with tab:
-            fn(filenames, page)
+    with tabs[0]:
+        _tab_chat(filenames, page)
+    with tabs[1]:
+        _tab_summary(filenames, page)
+    with tabs[2]:
+        _tab_quiz(filenames, page)
+    with tabs[3]:
+        _tab_flashcards(filenames, page)
+    with tabs[4]:
+        _tab_guide()
 
 
 run()
