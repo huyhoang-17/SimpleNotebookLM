@@ -1,6 +1,6 @@
-# Hướng dẫn sử dụng NotebookLM
+# Hướng dẫn sử dụng VinLM
 
-Chào mừng bạn đến với **Vinno** — hệ thống RAG học tập giúp bạn hỏi đáp, tóm tắt, tạo quiz và flashcards từ tài liệu PDF của riêng bạn.
+Chào mừng bạn đến với **VinLM** — hệ thống RAG học tập giúp bạn hỏi đáp, tóm tắt, tạo quiz và flashcards từ tài liệu PDF của riêng bạn.
 
 ## 1. Tải tài liệu lên
 
