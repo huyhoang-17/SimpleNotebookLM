@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     flashcards_default_count: int = Field(default=15, ge=1, le=100)
     api_url: str = "http://localhost:8000"
 
+    auth_db_path: Path = Path("storage/auth.db")
+    jwt_secret: str = "change-me-in-production"
+    jwt_expires_min: int = Field(default=60 * 24, ge=1)
+    jwt_algorithm: str = "HS256"
+    admin_username: str = "admin"
+    admin_password: str | None = None
+
     @model_validator(mode="after")
     def validate_config(self) -> "Settings":
         if self.chunk_overlap >= self.chunk_size:

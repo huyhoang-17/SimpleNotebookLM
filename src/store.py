@@ -65,6 +65,7 @@ INDEXED_PAYLOAD_FIELDS = {
     "metadata.document_id": qmodels.PayloadSchemaType.KEYWORD,
     "metadata.filename": qmodels.PayloadSchemaType.KEYWORD,
     "metadata.page": qmodels.PayloadSchemaType.INTEGER,
+    "metadata.owner_id": qmodels.PayloadSchemaType.KEYWORD,
 }
 
 

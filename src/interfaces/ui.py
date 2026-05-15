@@ -17,6 +17,9 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import streamlit as st
 
+from src.auth import service as auth_service
+from src.auth.security import verify_password
+from src.auth.service import ensure_seed_admin
 from src.indexing import save_and_ingest_pdf
 from src.learning import generate_flashcards, generate_quiz
 from src.learning import summarize as summarize_learning
@@ -31,21 +34,49 @@ GLOBAL_CSS = """
 """
 
 
+# ==========================================
+# Auth helpers (session_state-based)
+# ==========================================
+
+def _current_user() -> dict | None:
+    return st.session_state.get("user")
+
+
+def _is_admin() -> bool:
+    user = _current_user()
+    return bool(user and user.get("role") == "admin")
+
+
+def _owner_filter() -> dict:
+    user = _current_user()
+    if not user or user.get("role") == "admin":
+        return {}
+    return {"owner_id": user["username"]}
+
+
+# ==========================================
+# Document/filter helpers
+# ==========================================
+
 def _list_documents() -> list[dict]:
     try:
-        chunks = fetch_all_chunks()
+        chunks = fetch_all_chunks(filters=_owner_filter() or None)
     except Exception:
         return []
-    seen: dict[str, str] = {}
+    seen: dict[str, dict] = {}
     for chunk in chunks:
         doc_id = chunk.metadata.document_id
         if doc_id not in seen:
-            seen[doc_id] = chunk.metadata.filename
-    return [{"document_id": k, "filename": v} for k, v in seen.items()]
+            seen[doc_id] = {
+                "document_id": doc_id,
+                "filename": chunk.metadata.filename,
+                "owner_id": chunk.metadata.owner_id,
+            }
+    return list(seen.values())
 
 
 def _build_filters(filenames: list[str], page: int | None) -> dict | None:
-    f: dict = {}
+    f: dict = dict(_owner_filter())
     if filenames:
         f["filenames"] = filenames
     if page is not None:
@@ -53,7 +84,87 @@ def _build_filters(filenames: list[str], page: int | None) -> dict | None:
     return f or None
 
 
+# ==========================================
+# Login / Register / Sidebar
+# ==========================================
+
+def _set_user(user) -> None:
+    st.session_state["user"] = {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "role": user.role,
+    }
+
+
+def _login_page() -> None:
+    st.set_page_config(page_title="VinLM - Đăng nhập", layout="centered")
+    st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
+    st.title("VinLM")
+    st.caption("Hệ thống RAG học tập — vui lòng đăng nhập để tiếp tục.")
+
+    tab_login, tab_register = st.tabs(["Đăng nhập", "Đăng ký"])
+
+    with tab_login:
+        with st.form("login_form", clear_on_submit=False):
+            username = st.text_input("Tên đăng nhập", key="login_username")
+            password = st.text_input("Mật khẩu", type="password", key="login_password")
+            submitted = st.form_submit_button("Đăng nhập")
+        if submitted:
+            user = auth_service.authenticate(username.strip(), password)
+            if user is None:
+                st.error("Sai tên đăng nhập/mật khẩu hoặc tài khoản đã bị vô hiệu hóa.")
+            else:
+                _set_user(user)
+                st.success(f"Xin chào, {user.username}!")
+                st.rerun()
+
+    with tab_register:
+        with st.form("register_form", clear_on_submit=False):
+            r_username = st.text_input("Tên đăng nhập", key="reg_username")
+            r_email = st.text_input("Email (tùy chọn)", key="reg_email")
+            r_password = st.text_input("Mật khẩu (≥6 ký tự)", type="password", key="reg_password")
+            r_confirm = st.text_input("Xác nhận mật khẩu", type="password", key="reg_confirm")
+            submitted_r = st.form_submit_button("Đăng ký")
+        if submitted_r:
+            if r_password != r_confirm:
+                st.error("Mật khẩu xác nhận không khớp.")
+            else:
+                try:
+                    auth_service.create_user(
+                        username=r_username.strip(),
+                        password=r_password,
+                        email=(r_email.strip() or None),
+                        role="user",
+                    )
+                    st.success("Đăng ký thành công. Vui lòng chuyển sang tab Đăng nhập.")
+                except ValueError as e:
+                    st.error(f"Đăng ký thất bại: {e}")
+
+
 def _sidebar() -> tuple[list[str], int | None]:
+    user = _current_user()
+    st.sidebar.markdown(f"**Xin chào, `{user['username']}`** ({user['role']})")
+    if st.sidebar.button("Đăng xuất", key="btn_logout"):
+        for key in ("user", "quiz_data", "quiz_answers", "fc_cards", "fc_index", "fc_show_back"):
+            st.session_state.pop(key, None)
+        st.rerun()
+
+    with st.sidebar.expander("Đổi mật khẩu"):
+        old_pw = st.text_input("Mật khẩu cũ", type="password", key="cp_old")
+        new_pw = st.text_input("Mật khẩu mới (≥6 ký tự)", type="password", key="cp_new")
+        if st.button("Cập nhật mật khẩu", key="btn_change_pw"):
+            db_user = auth_service.get_user_by_id(user["id"])
+            if db_user is None or not verify_password(old_pw, db_user.password_hash):
+                st.error("Mật khẩu cũ không đúng.")
+            else:
+                try:
+                    auth_service.change_password(user["id"], new_pw)
+                    st.success("Đã đổi mật khẩu.")
+                except ValueError as e:
+                    st.error(f"Lỗi: {e}")
+
+    st.sidebar.markdown("---")
     st.sidebar.title("Bộ lọc")
 
     docs = _list_documents()
@@ -69,7 +180,11 @@ def _sidebar() -> tuple[list[str], int | None]:
     if uploaded and st.sidebar.button("Tải lên"):
         with st.sidebar.spinner("Đang tải lên và index..."):
             try:
-                result = save_and_ingest_pdf(uploaded.getvalue(), uploaded.name)
+                result = save_and_ingest_pdf(
+                    uploaded.getvalue(),
+                    uploaded.name,
+                    owner_id=user["username"],
+                )
                 st.sidebar.success(f"Đã index {result['chunks_indexed']} chunks")
                 st.rerun()
             except Exception as e:
@@ -77,6 +192,10 @@ def _sidebar() -> tuple[list[str], int | None]:
 
     return selected, page
 
+
+# ==========================================
+# Feature tabs
+# ==========================================
 
 def _tab_chat(filenames: list[str], page: int | None) -> None:
     st.header("Hỏi đáp")
@@ -253,12 +372,131 @@ def _tab_flashcards(filenames: list[str], page: int | None) -> None:
                 st.rerun()
 
 
+# ==========================================
+# Admin tab — manage users
+# ==========================================
+
+def _tab_admin_users() -> None:
+    st.header("Quản lý user")
+    current = _current_user() or {}
+
+    users = auth_service.list_users()
+    st.subheader("Danh sách user")
+    if not users:
+        st.info("Chưa có user nào.")
+    else:
+        table = [
+            {
+                "id": u.id,
+                "username": u.username,
+                "email": u.email or "",
+                "role": u.role,
+                "active": u.active,
+                "created_at": u.created_at.isoformat(sep=" ", timespec="seconds"),
+                "last_login": u.last_login.isoformat(sep=" ", timespec="seconds") if u.last_login else "",
+            }
+            for u in users
+        ]
+        st.dataframe(table, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("Tạo user mới")
+    with st.form("admin_create_user"):
+        c_username = st.text_input("Tên đăng nhập", key="adm_new_username")
+        c_email = st.text_input("Email (tùy chọn)", key="adm_new_email")
+        c_password = st.text_input("Mật khẩu", type="password", key="adm_new_password")
+        c_role = st.selectbox("Role", ["user", "admin"], index=0, key="adm_new_role")
+        c_submit = st.form_submit_button("Tạo user")
+    if c_submit:
+        try:
+            auth_service.create_user(
+                username=c_username.strip(),
+                password=c_password,
+                email=(c_email.strip() or None),
+                role=c_role,
+            )
+            st.success(f"Đã tạo user '{c_username}'.")
+            st.rerun()
+        except ValueError as e:
+            st.error(f"Lỗi: {e}")
+
+    if not users:
+        return
+
+    st.markdown("---")
+    st.subheader("Sửa user")
+    options = {f"{u.username} (id={u.id}, role={u.role}, active={u.active})": u for u in users}
+    label = st.selectbox("Chọn user", list(options.keys()), key="adm_pick_user")
+    target = options[label]
+    is_self = target.id == current.get("id")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        new_role = st.selectbox(
+            "Role mới",
+            ["user", "admin"],
+            index=0 if target.role == "user" else 1,
+            key=f"adm_role_{target.id}",
+        )
+        if st.button("Cập nhật role", key=f"adm_btn_role_{target.id}"):
+            if is_self and new_role != "admin":
+                st.error("Admin không được tự hạ quyền của chính mình.")
+            else:
+                try:
+                    auth_service.set_role(target.id, new_role)
+                    st.success("Đã cập nhật role.")
+                    st.rerun()
+                except ValueError as e:
+                    st.error(f"Lỗi: {e}")
+
+        toggle_label = "Vô hiệu hóa" if target.active else "Kích hoạt"
+        if st.button(toggle_label, key=f"adm_btn_active_{target.id}"):
+            if is_self and target.active:
+                st.error("Admin không được tự vô hiệu hóa chính mình.")
+            else:
+                auth_service.set_active(target.id, not target.active)
+                st.success(f"Đã {toggle_label.lower()} user.")
+                st.rerun()
+
+    with col2:
+        new_pw = st.text_input("Mật khẩu mới", type="password", key=f"adm_pw_{target.id}")
+        if st.button("Reset mật khẩu", key=f"adm_btn_pw_{target.id}"):
+            try:
+                auth_service.change_password(target.id, new_pw)
+                st.success("Đã reset mật khẩu.")
+            except ValueError as e:
+                st.error(f"Lỗi: {e}")
+
+        if st.button("Xóa user", key=f"adm_btn_del_{target.id}"):
+            if is_self:
+                st.error("Admin không được tự xóa chính mình.")
+            else:
+                auth_service.delete_user(target.id)
+                st.success(f"Đã xóa user '{target.username}'.")
+                st.rerun()
+
+
+# ==========================================
+# Entry point
+# ==========================================
+
 def run():
+    ensure_seed_admin()
+
+    if _current_user() is None:
+        _login_page()
+        return
+
     st.set_page_config(page_title="RAG Learning System", layout="wide")
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
     filenames, page = _sidebar()
-    tabs = st.tabs(["Hỏi đáp", "Tóm tắt", "Quiz", "Flashcards", "Hướng dẫn"])
+
+    tab_labels = ["Hỏi đáp", "Tóm tắt", "Quiz", "Flashcards", "Hướng dẫn"]
+    if _is_admin():
+        tab_labels.append("Quản lý user")
+
+    tabs = st.tabs(tab_labels)
 
     with tabs[0]:
         _tab_chat(filenames, page)
@@ -270,6 +508,9 @@ def run():
         _tab_flashcards(filenames, page)
     with tabs[4]:
         _tab_guide()
+    if _is_admin():
+        with tabs[5]:
+            _tab_admin_users()
 
 
 run()

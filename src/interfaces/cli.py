@@ -55,8 +55,13 @@ def _emit(result, output: Optional[str], fmt: str) -> None:
 @app.command()
 def ingest(
     recreate: bool = typer.Option(False, "--recreate", help="Xóa và tạo lại collection"),
+    user: Optional[str] = typer.Option(
+        None,
+        "--user",
+        help="Gán quyền sở hữu (owner_id) cho các tài liệu được ingest",
+    ),
 ):
-    count = _ingest(recreate=recreate)
+    count = _ingest(recreate=recreate, owner_id=user)
     typer.echo(f"Xong. Đã index {count} chunks.")
 
 

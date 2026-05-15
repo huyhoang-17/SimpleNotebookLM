@@ -8,6 +8,7 @@ class MetadataFilter(BaseModel):
     page: int | None = None
     section: str | None = None
     document_id: str | None = None
+    owner_id: str | None = None
 
     @model_validator(mode="after")
     def _normalize(self) -> "MetadataFilter":
@@ -26,6 +27,8 @@ class MetadataFilter(BaseModel):
             self.section = self.section.strip() or None
         if self.document_id is not None:
             self.document_id = self.document_id.strip() or None
+        if self.owner_id is not None:
+            self.owner_id = self.owner_id.strip() or None
 
         return self
 

@@ -37,5 +37,13 @@ pydantic-settings>=2.6
 # PDF loading
 pypdf>=5.0
 
+# Authentication & user management
+passlib[bcrypt]>=1.7
+# pin bcrypt<4.1: passlib 1.7.4 relies on bcrypt.__about__ which was removed in 4.1+
+bcrypt>=4.0,<4.1
+python-jose[cryptography]>=3.3
+sqlmodel>=0.0.22
+python-multipart>=0.0.9
+
 # Evaluation dependencies are in requirements-eval.txt
 # Install separately: pip install -r requirements-eval.txt

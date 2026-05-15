@@ -24,7 +24,7 @@ def _chunk_id(doc_id, page, index):
     return f"{doc_id}:{page}:{index}"
 
 
-def _load_pdf(path):
+def _load_pdf(path, owner_id=None):
     pages = PyPDFLoader(str(path)).load()
     doc_id = _document_id(path)
 
@@ -36,6 +36,7 @@ def _load_pdf(path):
             "source": str(path.resolve()),
             "page": page_number,
             "section": doc.metadata.get("section"),
+            "owner_id": owner_id,
         }
     return pages
 
@@ -53,10 +54,10 @@ def discover_pdfs():
     return sorted(settings.data_dir.glob("*.pdf"))
 
 
-def build_chunks(pdf_paths, chunk_size=None, chunk_overlap=None, chunker=None):
+def build_chunks(pdf_paths, chunk_size=None, chunk_overlap=None, chunker=None, owner_id=None):
     page_docs = []
     for path in pdf_paths:
-        page_docs.extend(_load_pdf(path))
+        page_docs.extend(_load_pdf(path, owner_id=owner_id))
 
     splitter = chunker or _splitter(chunk_size, chunk_overlap)
     chunks = splitter.split_documents(page_docs)
@@ -74,6 +75,7 @@ def build_chunks(pdf_paths, chunk_size=None, chunk_overlap=None, chunker=None):
             page=chunk.metadata["page"],
             chunk_id=_chunk_id(doc_id, chunk.metadata["page"], idx),
             section=chunk.metadata.get("section"),
+            owner_id=chunk.metadata.get("owner_id"),
         )
         chunk.metadata = meta.model_dump()
 
@@ -93,19 +95,25 @@ def index_chunks(chunks, collection_name=None):
     return len(chunks)
 
 
-def ingest(recreate=False, collection_name=None, chunker=None, chunk_size=None, chunk_overlap=None):
+def ingest(recreate=False, collection_name=None, chunker=None, chunk_size=None, chunk_overlap=None, owner_id=None):
     pdfs = discover_pdfs()
     ensure_collection(recreate=recreate, collection_name=collection_name)
-    chunks = build_chunks(pdfs, chunker=chunker, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    chunks = build_chunks(
+        pdfs,
+        chunker=chunker,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        owner_id=owner_id,
+    )
     return index_chunks(chunks, collection_name=collection_name)
 
 
-def save_and_ingest_pdf(file_bytes, filename):
+def save_and_ingest_pdf(file_bytes, filename, owner_id=None):
     safe_name = Path(filename).name
     dest = settings.data_dir / safe_name
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(file_bytes)
 
     ensure_collection(recreate=False)
-    chunks = build_chunks([dest])
+    chunks = build_chunks([dest], owner_id=owner_id)
     return {"filename": safe_name, "chunks_indexed": index_chunks(chunks)}

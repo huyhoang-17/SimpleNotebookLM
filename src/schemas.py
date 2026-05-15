@@ -10,6 +10,7 @@ class ChunkMetadata(BaseModel):
     page: int
     chunk_id: str
     section: str | None = None
+    owner_id: str | None = None
 
 
 class RetrievedChunk(BaseModel):
