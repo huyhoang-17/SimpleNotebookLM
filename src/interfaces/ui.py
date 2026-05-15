@@ -17,6 +17,18 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import streamlit as st
 
+# Bridge Streamlit Cloud secrets into os.environ.
+# pydantic-settings reads from environment variables; Streamlit Cloud only
+# exposes its dashboard secrets via st.secrets, so we copy them across BEFORE
+# any src.* module (which transitively imports src.config) is loaded.
+try:
+    _streamlit_secrets = dict(st.secrets) if hasattr(st, "secrets") else {}
+except Exception:
+    _streamlit_secrets = {}
+for _k, _v in _streamlit_secrets.items():
+    if isinstance(_v, str) and _k not in os.environ:
+        os.environ[_k] = _v
+
 from src.auth import service as auth_service
 from src.auth.security import verify_password
 from src.auth.service import ensure_seed_admin
