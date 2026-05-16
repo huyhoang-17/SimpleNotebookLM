@@ -1,13 +1,14 @@
 import logging
 import secrets
-from datetime import datetime
+from collections import Counter
+from datetime import date, datetime, timedelta
 from typing import Optional
 
-from sqlmodel import select
+from sqlmodel import delete, select
 
 from ..config import settings
 from .db import init_db, session
-from .models import User
+from .models import QuestionLog, User
 from .security import hash_password, verify_password
 
 logger = logging.getLogger(__name__)
@@ -135,12 +136,114 @@ def update_email(user_id: int, email: Optional[str]) -> User:
 
 
 def delete_user(user_id: int) -> None:
+    delete_questions_by_user(user_id)
     with session() as s:
         user = s.get(User, user_id)
         if user is None:
             return
         s.delete(user)
         s.commit()
+
+
+# ==========================================
+# Question logging & statistics
+# ==========================================
+
+def log_question(
+    user_id: int,
+    username: str,
+    question: str,
+    answer_preview: Optional[str] = None,
+    k: int = 5,
+    filenames: Optional[str] = None,
+    page_filter: Optional[int] = None,
+    success: bool = True,
+    error_message: Optional[str] = None,
+) -> None:
+    log = QuestionLog(
+        user_id=user_id,
+        username=username,
+        question=question,
+        answer_preview=answer_preview,
+        k=k,
+        filenames=filenames,
+        page_filter=page_filter,
+        success=success,
+        error_message=error_message,
+    )
+    with session() as s:
+        s.add(log)
+        s.commit()
+
+
+def list_questions_by_user(user_id: int, limit: int = 200) -> list[QuestionLog]:
+    with session() as s:
+        stmt = (
+            select(QuestionLog)
+            .where(QuestionLog.user_id == user_id)
+            .order_by(QuestionLog.created_at.desc())
+            .limit(limit)
+        )
+        return list(s.exec(stmt))
+
+
+def count_questions_by_user(user_id: int) -> int:
+    with session() as s:
+        return len(list(s.exec(select(QuestionLog.id).where(QuestionLog.user_id == user_id))))
+
+
+def delete_questions_by_user(user_id: int) -> int:
+    with session() as s:
+        rows = list(s.exec(select(QuestionLog).where(QuestionLog.user_id == user_id)))
+        count = len(rows)
+        if count:
+            s.exec(delete(QuestionLog).where(QuestionLog.user_id == user_id))
+            s.commit()
+        return count
+
+
+def list_all_questions(limit: int = 10000) -> list[QuestionLog]:
+    with session() as s:
+        stmt = (
+            select(QuestionLog)
+            .order_by(QuestionLog.created_at.desc())
+            .limit(limit)
+        )
+        return list(s.exec(stmt))
+
+
+def top_users_by_questions(limit: int = 10) -> list[tuple[str, int]]:
+    with session() as s:
+        rows = list(s.exec(select(QuestionLog.username)))
+    counter = Counter(rows)
+    return counter.most_common(limit)
+
+
+def questions_per_day(days: int = 30) -> list[tuple[date, int]]:
+    if days <= 0:
+        return []
+    today = date.today()
+    cutoff = datetime.combine(today - timedelta(days=days - 1), datetime.min.time())
+    with session() as s:
+        stmt = select(QuestionLog.created_at).where(QuestionLog.created_at >= cutoff)
+        timestamps = list(s.exec(stmt))
+
+    counts: dict[date, int] = {}
+    for i in range(days):
+        counts[today - timedelta(days=days - 1 - i)] = 0
+    for ts in timestamps:
+        d = ts.date() if isinstance(ts, datetime) else ts
+        if d in counts:
+            counts[d] += 1
+    return [(d, counts[d]) for d in sorted(counts.keys())]
+
+
+def success_rate() -> tuple[int, int]:
+    with session() as s:
+        flags = list(s.exec(select(QuestionLog.success)))
+    success_count = sum(1 for f in flags if f)
+    error_count = len(flags) - success_count
+    return success_count, error_count
 
 
 def ensure_seed_admin() -> None:

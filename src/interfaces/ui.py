@@ -1,6 +1,9 @@
+import csv
 import html
+import io
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # Ensure project root is on sys.path when run with `streamlit run`
@@ -284,6 +287,25 @@ def _list_documents() -> list[dict]:
     return list(seen.values())
 
 
+def _list_documents_of(username: str) -> list[dict]:
+    try:
+        chunks = fetch_all_chunks(filters={"owner_id": username})
+    except Exception:
+        return []
+    seen: dict[str, dict] = {}
+    for chunk in chunks:
+        doc_id = chunk.metadata.document_id
+        if doc_id not in seen:
+            seen[doc_id] = {
+                "document_id": doc_id,
+                "filename": chunk.metadata.filename,
+                "chunk_count": 1,
+            }
+        else:
+            seen[doc_id]["chunk_count"] += 1
+    return list(seen.values())
+
+
 def _build_filters(filenames: list[str], page: int | None) -> dict | None:
     f: dict = dict(_owner_filter())
     if filenames:
@@ -466,6 +488,7 @@ NAV_ITEMS_BASE = [
     "🃏 Flashcards",
     "📖 Hướng dẫn",
 ]
+NAV_ADMIN_DASHBOARD = "📊 Dashboard"
 NAV_ADMIN_ITEM = "⚙️ Quản lý user"
 
 
@@ -478,6 +501,7 @@ def _sidebar() -> tuple[str, list[str], int | None]:
         st.markdown('<div class="section-label">Chức năng</div>', unsafe_allow_html=True)
         items = list(NAV_ITEMS_BASE)
         if _is_admin():
+            items.append(NAV_ADMIN_DASHBOARD)
             items.append(NAV_ADMIN_ITEM)
         nav = st.radio(
             "Điều hướng",
@@ -578,6 +602,8 @@ def _view_chat(filenames: list[str], page: int | None) -> None:
         ask = st.button("Hỏi", key="btn_ask", type="primary")
 
     if ask and question:
+        user = _current_user() or {}
+        filenames_csv = ",".join(filenames) if filenames else None
         with st.spinner("Đang trả lời..."):
             try:
                 result = answer(question, k=k, filters=_build_filters(filenames, page))
@@ -586,8 +612,31 @@ def _view_chat(filenames: list[str], page: int | None) -> None:
                     with st.expander("Nguồn trích dẫn"):
                         for c in result.citations:
                             st.write(f"**{c.source_marker}**: {c.filename}, trang {c.page}")
+                if user.get("id") is not None:
+                    auth_service.log_question(
+                        user_id=user["id"],
+                        username=user["username"],
+                        question=question,
+                        answer_preview=(result.answer or "")[:200],
+                        k=k,
+                        filenames=filenames_csv,
+                        page_filter=page,
+                        success=True,
+                    )
             except Exception as e:
                 st.error(f"Lỗi: {e}")
+                if user.get("id") is not None:
+                    auth_service.log_question(
+                        user_id=user["id"],
+                        username=user["username"],
+                        question=question,
+                        answer_preview=None,
+                        k=k,
+                        filenames=filenames_csv,
+                        page_filter=page,
+                        success=False,
+                        error_message=str(e),
+                    )
 
 
 def _view_summary(filenames: list[str], page: int | None) -> None:
@@ -870,6 +919,105 @@ def _view_admin_users() -> None:
                 st.success(f"Đã xóa user '{target.username}'.")
                 st.rerun()
 
+    st.markdown("---")
+    st.subheader(f"Hoạt động của user: {target.username}")
+
+    with st.expander("📄 Tài liệu đã upload", expanded=False):
+        docs = _list_documents_of(target.username)
+        if not docs:
+            st.info("User này chưa upload tài liệu nào.")
+        else:
+            st.dataframe(
+                [
+                    {
+                        "filename": d["filename"],
+                        "document_id": d["document_id"],
+                        "số chunks": d["chunk_count"],
+                    }
+                    for d in docs
+                ],
+                use_container_width=True,
+            )
+
+    with st.expander("❓ Câu hỏi đã hỏi (Hỏi đáp)", expanded=False):
+        logs = auth_service.list_questions_by_user(target.id, limit=200)
+        total = auth_service.count_questions_by_user(target.id)
+        st.caption(f"Tổng số câu hỏi: {total} (hiển thị {len(logs)} mới nhất)")
+        if not logs:
+            st.info("User này chưa đặt câu hỏi nào.")
+        else:
+            rows = [
+                {
+                    "thời gian": log.created_at.isoformat(sep=" ", timespec="seconds"),
+                    "câu hỏi": log.question,
+                    "preview trả lời": (log.answer_preview or "")[:200],
+                    "k": log.k,
+                    "filter file": log.filenames or "(tất cả)",
+                    "trang": log.page_filter or "",
+                    "thành công": "✅" if log.success else "❌",
+                    "lỗi": log.error_message or "",
+                }
+                for log in logs
+            ]
+            st.dataframe(rows, use_container_width=True)
+
+            buf = io.StringIO()
+            writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+            st.download_button(
+                label="⬇️ Export CSV",
+                data=buf.getvalue().encode("utf-8-sig"),
+                file_name=f"questions_{target.username}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                key=f"export_csv_{target.id}",
+            )
+
+
+# ==========================================
+# Dashboard view (admin only)
+# ==========================================
+
+def _view_dashboard() -> None:
+    _page_header("Dashboard thống kê", "Tổng quan hoạt động Hỏi đáp toàn hệ thống.")
+
+    total_users = len(auth_service.list_users())
+    all_logs = auth_service.list_all_questions(limit=100000)
+    total_q = len(all_logs)
+    success_count, error_count = auth_service.success_rate()
+    success_pct = (100.0 * success_count / total_q) if total_q else 0.0
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Tổng user", total_users)
+    c2.metric("Tổng câu hỏi", total_q)
+    c3.metric("Thành công", f"{success_count} ({success_pct:.1f}%)")
+    c4.metric("Lỗi", error_count)
+
+    st.markdown("---")
+
+    st.subheader("Top 10 user hỏi nhiều nhất")
+    top = auth_service.top_users_by_questions(limit=10)
+    if not top:
+        st.info("Chưa có dữ liệu.")
+    else:
+        import pandas as pd
+        df_top = pd.DataFrame(top, columns=["username", "số câu hỏi"])
+        st.bar_chart(df_top.set_index("username"))
+        st.dataframe(df_top, use_container_width=True)
+
+    st.markdown("---")
+
+    st.subheader("Câu hỏi theo ngày")
+    days = st.selectbox("Khoảng thời gian", [7, 30, 90], index=1, key="dash_days")
+    per_day = auth_service.questions_per_day(days=days)
+    if not per_day:
+        st.info("Chưa có dữ liệu.")
+    else:
+        import pandas as pd
+        df_day = pd.DataFrame(per_day, columns=["ngày", "số câu hỏi"])
+        df_day["ngày"] = pd.to_datetime(df_day["ngày"])
+        st.line_chart(df_day.set_index("ngày"))
+
 
 # ==========================================
 # Entry point
@@ -881,6 +1029,7 @@ VIEW_DISPATCH = {
     "🎯 Quiz": "quiz",
     "🃏 Flashcards": "flashcards",
     "📖 Hướng dẫn": "guide",
+    "📊 Dashboard": "dashboard",
     "⚙️ Quản lý user": "admin",
 }
 
@@ -909,6 +1058,8 @@ def run():
         _view_flashcards(filenames, page)
     elif view == "guide":
         _view_guide()
+    elif view == "dashboard" and _is_admin():
+        _view_dashboard()
     elif view == "admin" and _is_admin():
         _view_admin_users()
 
