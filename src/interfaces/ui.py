@@ -30,6 +30,7 @@ from src.auth import service as auth_service
 from src.auth.security import verify_password
 from src.auth.service import ensure_seed_admin
 from src.indexing import save_and_ingest_pdf
+from src.interfaces import session as session_mod
 from src.learning import generate_flashcards, generate_quiz
 from src.learning import summarize as summarize_learning
 from src.rag import answer, fetch_all_chunks
@@ -440,6 +441,10 @@ def _set_user(user) -> None:
         "email": user.email,
         "role": user.role,
     }
+    try:
+        session_mod.issue_session(user)
+    except Exception as e:
+        st.warning(f"Không thể lưu cookie phiên đăng nhập: {e}")
 
 
 # ==========================================
@@ -507,6 +512,7 @@ NAV_ITEMS_BASE = [
     "✨ Tóm tắt",
     "🎯 Quiz",
     "🃏 Flashcards",
+    "📜 Lịch sử",
     "📖 Hướng dẫn",
 ]
 NAV_ADMIN_DASHBOARD = "📊 Dashboard"
@@ -576,13 +582,15 @@ def _sidebar() -> tuple[str, list[str], int | None]:
 
         st.markdown(_user_card_html(user), unsafe_allow_html=True)
         if st.button("Đăng xuất", key="btn_logout"):
-            for key in (
-                "user", "quiz_data", "quiz_answers",
-                "fc_cards", "fc_index", "fc_show_back",
-                "selected_docs", "nav_choice",
-            ):
-                st.session_state.pop(key, None)
+            session_mod.clear_session()
             st.rerun()
+
+        if _is_admin() and session_mod.default_secret_warning():
+            st.error(
+                "⚠️ `RAG_JWT_SECRET` đang dùng giá trị mặc định. "
+                "Hãy đặt giá trị bí mật mạnh trong `.env` rồi reboot app — "
+                "token JWT hiện tại có thể bị giả mạo."
+            )
 
     return nav, selected, page
 
@@ -838,6 +846,71 @@ def _view_guide() -> None:
                 "Hãy thử gõ \"hướng dẫn sử dụng notebook\". "
                 "Nếu bạn muốn hỏi về nội dung tài liệu, vui lòng dùng mục **Hỏi đáp**."
             )
+
+
+def _view_history() -> None:
+    _page_header("Lịch sử câu hỏi", "Xem lại các câu hỏi bạn đã đặt trong tab Hỏi đáp.")
+    user = _current_user() or {}
+    user_id = user.get("id")
+    if user_id is None:
+        st.error("Không xác định được user.")
+        return
+
+    total = auth_service.count_questions_by_user(user_id)
+    st.caption(f"Tổng số câu hỏi đã hỏi: {total}")
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        keyword = st.text_input("🔍 Tìm trong câu hỏi", key="hist_kw")
+    with col2:
+        status_filter = st.selectbox(
+            "Trạng thái", ["Tất cả", "Thành công", "Lỗi"], key="hist_status"
+        )
+
+    logs = auth_service.list_questions_by_user(user_id, limit=500)
+
+    if keyword.strip():
+        kw = keyword.strip().lower()
+        logs = [log for log in logs if kw in log.question.lower()]
+    if status_filter == "Thành công":
+        logs = [log for log in logs if log.success]
+    elif status_filter == "Lỗi":
+        logs = [log for log in logs if not log.success]
+
+    if not logs:
+        st.info("Không có câu hỏi nào khớp bộ lọc.")
+    else:
+        for log in logs:
+            ts = log.created_at.isoformat(sep=" ", timespec="seconds")
+            icon = "✅" if log.success else "❌"
+            preview_title = log.question[:80] + ("…" if len(log.question) > 80 else "")
+            with st.expander(f"{icon} [{ts}] {preview_title}"):
+                st.markdown(f"**Câu hỏi:** {log.question}")
+                if log.answer_preview:
+                    st.markdown(f"**Preview trả lời:** {log.answer_preview}")
+                meta_parts = [f"k={log.k}"]
+                if log.filenames:
+                    meta_parts.append(f"file: {log.filenames}")
+                if log.page_filter:
+                    meta_parts.append(f"trang: {log.page_filter}")
+                st.caption(" · ".join(meta_parts))
+                if not log.success and log.error_message:
+                    st.error(f"Lỗi: {log.error_message}")
+
+    st.markdown("---")
+    with st.expander("⚠️ Xóa toàn bộ lịch sử của tôi"):
+        st.warning("Hành động này không thể hoàn tác.")
+        confirm = st.text_input(
+            f"Gõ chính xác `{user['username']}` để xác nhận",
+            key="hist_del_confirm",
+        )
+        if st.button("Xóa lịch sử", key="hist_del_btn"):
+            if confirm.strip() == user["username"]:
+                n = auth_service.delete_questions_by_user(user_id)
+                st.success(f"Đã xóa {n} câu hỏi.")
+                st.rerun()
+            else:
+                st.error("Xác nhận không khớp.")
 
 
 def _view_admin_users() -> None:
@@ -1134,6 +1207,7 @@ VIEW_DISPATCH = {
     "✨ Tóm tắt": "summary",
     "🎯 Quiz": "quiz",
     "🃏 Flashcards": "flashcards",
+    "📜 Lịch sử": "history",
     "📖 Hướng dẫn": "guide",
     "📊 Dashboard": "dashboard",
     "⚙️ Quản lý user": "admin",
@@ -1142,8 +1216,12 @@ VIEW_DISPATCH = {
 
 def run():
     ensure_seed_admin()
+    session_mod.restore_session()
 
     if _current_user() is None:
+        reason = st.session_state.pop("_logout_reason", None)
+        if reason:
+            st.warning(reason)
         _login_page()
         return
 
@@ -1162,6 +1240,8 @@ def run():
         _view_quiz(filenames, page)
     elif view == "flashcards":
         _view_flashcards(filenames, page)
+    elif view == "history":
+        _view_history()
     elif view == "guide":
         _view_guide()
     elif view == "dashboard" and _is_admin():

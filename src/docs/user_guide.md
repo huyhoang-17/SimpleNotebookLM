@@ -62,14 +62,22 @@ Học theo phương pháp thẻ ghi nhớ:
 3. Nhấn **Tạo Flashcards**.
 4. Dùng nút **Lật thẻ** để xem mặt sau, **← Trước** / **Tiếp →** để di chuyển giữa các thẻ.
 
-## 6. Mẹo sử dụng hiệu quả
+## 6. Tab "Lịch sử"
+
+Xem lại các câu hỏi bạn đã đặt trong tab **Hỏi đáp** (chỉ riêng bạn — admin không xem chéo từ tab này):
+
+- Tìm kiếm theo từ khóa trong câu hỏi và lọc theo trạng thái (Thành công / Lỗi).
+- Mỗi dòng mở ra để xem câu hỏi đầy đủ, preview 200 ký tự đầu của câu trả lời, và metadata (k, file lọc, trang).
+- Có thể **Xóa toàn bộ lịch sử của tôi**: bạn phải gõ chính xác tên đăng nhập của mình để xác nhận.
+
+## 7. Mẹo sử dụng hiệu quả
 
 - **Đặt câu hỏi cụ thể**: "Quang hợp diễn ra ở đâu trong tế bào thực vật?" tốt hơn "Quang hợp là gì?".
 - **Dùng bộ lọc**: nếu đã upload nhiều tài liệu, chọn đúng file ở sidebar để tránh nhiễu.
 - **Tăng số chunks**: với câu hỏi tổng hợp / so sánh, tăng số chunks truy xuất lên 10–15.
 - **Kiểm tra nguồn**: luôn mở phần **Nguồn trích dẫn** để xác minh thông tin.
 
-## 7. Quản lý user (Admin)
+## 8. Quản lý user (Admin)
 
 Tab **Quản lý user** chỉ hiển thị với tài khoản có role `admin`. Tại đây admin có thể:
 
@@ -88,7 +96,7 @@ Tab **Quản lý user** chỉ hiển thị với tài khoản có role `admin`. 
 
 Khi dùng REST API (`uvicorn src.interfaces.api:app`), các endpoint admin tương ứng nằm dưới `/admin/users/*` và yêu cầu JWT của tài khoản role `admin`. Đăng nhập qua `POST /auth/login` (form `username` + `password`) để lấy `access_token`, sau đó gửi header `Authorization: Bearer <token>` cho mọi endpoint protected.
 
-## 8. Câu hỏi thường gặp
+## 9. Câu hỏi thường gặp
 
 **Hỏi: Tại sao chatbot từ chối trả lời câu hỏi của tôi?**
 → Chatbot chỉ trả lời câu hỏi liên quan đến nội dung tài liệu đã upload. Nếu câu hỏi nằm ngoài tài liệu hoặc thuộc kiến thức kỹ thuật chung, hệ thống sẽ từ chối lịch sự.
