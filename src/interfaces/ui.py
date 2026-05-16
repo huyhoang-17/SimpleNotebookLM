@@ -1,3 +1,4 @@
+import html
 import os
 import sys
 from pathlib import Path
@@ -8,19 +9,12 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 # Force CPU-only mode before torch/accelerate/pynvml are imported.
-# On CPU-only hosts (Streamlit Cloud), accelerate calls pynvml.nvmlInit() which
-# raises "Found no NVIDIA driver" — suppressing CUDA entirely prevents that path.
-# GPU users who set CUDA_VISIBLE_DEVICES in their own environment won't be affected
-# because their env var is set before the process starts, making these no-ops.
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import streamlit as st
 
 # Bridge Streamlit Cloud secrets into os.environ.
-# pydantic-settings reads from environment variables; Streamlit Cloud only
-# exposes its dashboard secrets via st.secrets, so we copy them across BEFORE
-# any src.* module (which transitively imports src.config) is loaded.
 try:
     _streamlit_secrets = dict(st.secrets) if hasattr(st, "secrets") else {}
 except Exception:
@@ -37,17 +31,220 @@ from src.learning import generate_flashcards, generate_quiz
 from src.learning import summarize as summarize_learning
 from src.rag import answer, fetch_all_chunks
 
+
+# ==========================================
+# Theme / CSS
+# ==========================================
+
 GLOBAL_CSS = """
 <style>
-    .stTabs [data-baseweb="tab-list"] { gap: 2px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; padding: 0px 16px; }
-    .stButton > button { width: 100%; }
+:root {
+    --bg: #F3F4F6;
+    --card: #FFFFFF;
+    --border: #E5E7EB;
+    --text: #111827;
+    --muted: #6B7280;
+    --subtle: #9CA3AF;
+    --accent: #F97316;
+    --accent-soft: #FFF7ED;
+    --accent-strong: #C2410C;
+    --accent-grad: linear-gradient(135deg, #FB923C, #EA580C);
+}
+
+/* ===== App background ===== */
+.stApp { background: var(--bg); }
+header[data-testid="stHeader"] { background: transparent; }
+.main .block-container { max-width: 1080px; padding-top: 2rem; padding-bottom: 4rem; }
+
+/* ===== Sidebar ===== */
+[data-testid="stSidebar"] { background: #FFFFFF; border-right: 1px solid var(--border); }
+[data-testid="stSidebar"] > div:first-child { padding-top: 0.6rem; }
+
+.vinlm-brand {
+    display: flex; align-items: center; gap: 0.7rem;
+    padding: 0.5rem 0.3rem 1rem 0.3rem;
+    border-bottom: 1px solid #F3F4F6;
+    margin-bottom: 0.8rem;
+}
+.vinlm-brand .logo-box {
+    width: 38px; height: 38px; border-radius: 11px;
+    background: var(--accent-grad);
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: 700; font-size: 1.05rem;
+    box-shadow: 0 4px 10px rgba(249, 115, 22, 0.25);
+}
+.vinlm-brand .brand-text { line-height: 1.15; }
+.vinlm-brand .brand-name { font-weight: 700; font-size: 1.08rem; color: var(--text); }
+.vinlm-brand .brand-sub { color: var(--subtle); font-size: 0.78rem; }
+
+.section-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--subtle);
+    margin: 1.1rem 0 0.4rem 0.15rem;
+    font-weight: 600;
+}
+
+/* Radio styled as nav list */
+[data-testid="stSidebar"] [role="radiogroup"] { gap: 0.15rem; }
+[data-testid="stSidebar"] [role="radiogroup"] > label {
+    padding: 0.5rem 0.65rem;
+    border-radius: 9px;
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+    margin: 0;
+    border: 1px solid transparent;
+}
+[data-testid="stSidebar"] [role="radiogroup"] > label:hover { background: #F9FAFB; }
+[data-testid="stSidebar"] [role="radiogroup"] > label:has(input:checked) {
+    background: var(--accent-soft);
+    border-color: #FDD7B0;
+}
+[data-testid="stSidebar"] [role="radiogroup"] > label:has(input:checked) p {
+    color: var(--accent-strong) !important;
+    font-weight: 600;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label p {
+    margin: 0; font-size: 0.93rem; color: var(--text); font-weight: 500;
+}
+/* Hide the round radio indicator — we use the whole row as a nav item */
+[data-testid="stSidebar"] [role="radiogroup"] label > div:first-child { display: none !important; }
+
+/* User card at bottom of sidebar */
+.user-card {
+    margin-top: 1.5rem;
+    padding: 0.85rem;
+    border-radius: 12px;
+    background: #F9FAFB;
+    border: 1px solid #F3F4F6;
+    display: flex; align-items: center; gap: 0.7rem;
+}
+.user-card .avatar {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: var(--accent-grad);
+    color: white; font-weight: 700; font-size: 0.95rem;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+.user-card .info { line-height: 1.25; min-width: 0; flex: 1; }
+.user-card .username {
+    font-weight: 600; font-size: 0.93rem; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.user-card .role { font-size: 0.78rem; color: var(--muted); text-transform: capitalize; }
+
+/* ===== Main area: page header & greeting ===== */
+.page-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    margin-bottom: 1.4rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+}
+.page-header .titles .page-title {
+    font-size: 1.5rem; font-weight: 600;
+    margin: 0; color: var(--text);
+}
+.page-header .titles .page-subtitle {
+    color: var(--muted); font-size: 0.92rem;
+    margin-top: 0.2rem;
+}
+.report-pill {
+    display: inline-block; padding: 0.45rem 0.85rem;
+    border: 1px solid var(--border); border-radius: 999px;
+    background: white; color: var(--muted);
+    font-size: 0.82rem; font-weight: 500;
+    text-decoration: none;
+}
+
+.greeting { text-align: center; margin: 1.2rem 0 1.8rem 0; }
+.greeting h2 {
+    font-size: 1.7rem; font-weight: 700;
+    color: var(--text); margin: 0 0 0.35rem 0;
+}
+.greeting p {
+    color: var(--muted); font-size: 0.93rem;
+    max-width: 540px; margin: 0 auto;
+}
+
+/* ===== Cards ===== */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border-radius: 16px !important;
+    border: 1px solid var(--border) !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    background: var(--card);
+}
+
+/* ===== Inputs ===== */
+.stTextArea textarea, .stTextInput input {
+    border-radius: 10px !important;
+    border: 1px solid var(--border) !important;
+    background: #FFFFFF;
+}
+.stTextArea textarea:focus, .stTextInput input:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15) !important;
+}
+
+/* ===== Buttons ===== */
+.stButton > button {
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: #FFFFFF;
+    color: #374151;
+    font-weight: 500;
+    transition: all 120ms;
+}
+.stButton > button:hover {
+    background: #F9FAFB; border-color: #D1D5DB;
+}
+.stButton > button[kind="primary"] {
+    background: var(--accent); border-color: var(--accent); color: white;
+}
+.stButton > button[kind="primary"]:hover {
+    background: #EA580C; border-color: #EA580C;
+}
+
+/* File uploader */
+[data-testid="stFileUploaderDropzone"] {
+    border-radius: 12px;
+    border: 1px dashed #D1D5DB;
+    background: #F9FAFB;
+}
+
+/* Expanders */
+details[data-testid="stExpander"] {
+    border-radius: 12px;
+    border: 1px solid var(--border);
+}
+
+/* Sliders accent */
+[data-testid="stSlider"] [role="slider"] { background: var(--accent) !important; }
+
+/* Toast */
+[data-testid="stToast"] { border-radius: 12px; }
+
+/* ===== Login page ===== */
+.login-wrap {
+    max-width: 420px; margin: 3rem auto 1rem auto;
+    text-align: center;
+}
+.login-wrap .logo-box {
+    width: 56px; height: 56px; border-radius: 16px;
+    background: var(--accent-grad);
+    color: white; font-weight: 700; font-size: 1.5rem;
+    display: inline-flex; align-items: center; justify-content: center;
+    box-shadow: 0 6px 14px rgba(249, 115, 22, 0.25);
+    margin-bottom: 1rem;
+}
+.login-wrap h1 { margin: 0; font-size: 1.7rem; color: var(--text); }
+.login-wrap p { color: var(--muted); margin-top: 0.3rem; }
 </style>
 """
 
 
 # ==========================================
-# Auth helpers (session_state-based)
+# Auth helpers
 # ==========================================
 
 def _current_user() -> dict | None:
@@ -96,9 +293,102 @@ def _build_filters(filenames: list[str], page: int | None) -> dict | None:
     return f or None
 
 
+def _doc_checkbox_filter(docs: list[dict]) -> list[str]:
+    """Render filter checkboxes in the current container. Returns selected filenames."""
+    if not docs:
+        st.caption("Chưa có tài liệu. Hãy upload PDF ở mục bên dưới.")
+        st.session_state["selected_docs"] = set()
+        return []
+
+    filenames_set = {d["filename"] for d in docs}
+    selected_docs: set[str] = st.session_state.get("selected_docs", set()) & filenames_set
+    st.session_state["selected_docs"] = selected_docs
+
+    col_all, col_none = st.columns(2)
+    with col_all:
+        if st.button("Chọn tất cả", key="btn_sel_all"):
+            st.session_state["selected_docs"] = set(filenames_set)
+            for d in docs:
+                st.session_state[f"doc_cb_{d['document_id']}"] = True
+            st.rerun()
+    with col_none:
+        if st.button("Bỏ chọn", key="btn_sel_none"):
+            st.session_state["selected_docs"] = set()
+            for d in docs:
+                st.session_state[f"doc_cb_{d['document_id']}"] = False
+            st.rerun()
+
+    container = st.container(height=240) if len(docs) > 6 else st.container()
+
+    new_selected: set[str] = set()
+    with container:
+        for d in docs:
+            cb_key = f"doc_cb_{d['document_id']}"
+            if cb_key not in st.session_state:
+                st.session_state[cb_key] = d["filename"] in selected_docs
+            checked = st.checkbox(d["filename"], key=cb_key)
+            if checked:
+                new_selected.add(d["filename"])
+
+    st.session_state["selected_docs"] = new_selected
+    return sorted(new_selected)
+
+
 # ==========================================
-# Login / Register / Sidebar
+# Reusable layout helpers
 # ==========================================
+
+def _brand_html() -> str:
+    return (
+        '<div class="vinlm-brand">'
+        '<div class="logo-box">V</div>'
+        '<div class="brand-text">'
+        '<div class="brand-name">VinLM</div>'
+        '<div class="brand-sub">RAG Learning</div>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _user_card_html(user: dict) -> str:
+    initial = (user.get("username") or "?")[0].upper()
+    username = html.escape(user.get("username") or "")
+    role = html.escape(user.get("role") or "")
+    return (
+        '<div class="user-card">'
+        f'<div class="avatar">{html.escape(initial)}</div>'
+        '<div class="info">'
+        f'<div class="username">{username}</div>'
+        f'<div class="role">{role}</div>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _page_header(title: str, subtitle: str) -> None:
+    st.markdown(
+        f'<div class="page-header">'
+        f'<div class="titles">'
+        f'<div class="page-title">{html.escape(title)}</div>'
+        f'<div class="page-subtitle">{html.escape(subtitle)}</div>'
+        f'</div>'
+        f'<a class="report-pill" href="https://github.com/huyhoang-17/SimpleNotebookLM/issues" target="_blank">Báo lỗi</a>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _greeting() -> None:
+    user = _current_user() or {}
+    name = user.get("username", "")
+    st.markdown(
+        f'<div class="greeting">'
+        f'<h2>Xin chào, {html.escape(name)} 👋</h2>'
+        f'<p>Đặt câu hỏi, tóm tắt nội dung, tạo quiz hay flashcards từ tài liệu PDF của bạn.</p>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
 
 def _set_user(user) -> None:
     st.session_state["user"] = {
@@ -109,11 +399,22 @@ def _set_user(user) -> None:
     }
 
 
+# ==========================================
+# Login page
+# ==========================================
+
 def _login_page() -> None:
     st.set_page_config(page_title="VinLM - Đăng nhập", layout="centered")
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
-    st.title("VinLM")
-    st.caption("Hệ thống RAG học tập — vui lòng đăng nhập để tiếp tục.")
+
+    st.markdown(
+        '<div class="login-wrap">'
+        '<div class="logo-box">V</div>'
+        '<h1>VinLM</h1>'
+        '<p>Hệ thống RAG học tập — vui lòng đăng nhập để tiếp tục.</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     tab_login, tab_register = st.tabs(["Đăng nhập", "Đăng ký"])
 
@@ -121,7 +422,7 @@ def _login_page() -> None:
         with st.form("login_form", clear_on_submit=False):
             username = st.text_input("Tên đăng nhập", key="login_username")
             password = st.text_input("Mật khẩu", type="password", key="login_password")
-            submitted = st.form_submit_button("Đăng nhập")
+            submitted = st.form_submit_button("Đăng nhập", type="primary")
         if submitted:
             user = auth_service.authenticate(username.strip(), password)
             if user is None:
@@ -137,7 +438,7 @@ def _login_page() -> None:
             r_email = st.text_input("Email (tùy chọn)", key="reg_email")
             r_password = st.text_input("Mật khẩu (≥6 ký tự)", type="password", key="reg_password")
             r_confirm = st.text_input("Xác nhận mật khẩu", type="password", key="reg_confirm")
-            submitted_r = st.form_submit_button("Đăng ký")
+            submitted_r = st.form_submit_button("Đăng ký", type="primary")
         if submitted_r:
             if r_password != r_confirm:
                 st.error("Mật khẩu xác nhận không khớp.")
@@ -154,120 +455,129 @@ def _login_page() -> None:
                     st.error(f"Đăng ký thất bại: {e}")
 
 
-def _doc_checkbox_filter(docs: list[dict]) -> list[str]:
-    """Render filter checkboxes in the sidebar. Returns the list of selected filenames."""
-    st.sidebar.markdown("### Chọn tài liệu")
+# ==========================================
+# Sidebar
+# ==========================================
 
-    if not docs:
-        st.sidebar.caption("Chưa có tài liệu. Hãy upload PDF ở mục bên dưới.")
-        st.session_state["selected_docs"] = set()
-        return []
-
-    filenames_set = {d["filename"] for d in docs}
-    selected_docs: set[str] = st.session_state.get("selected_docs", set()) & filenames_set
-    st.session_state["selected_docs"] = selected_docs
-
-    col_all, col_none = st.sidebar.columns(2)
-    with col_all:
-        if st.button("Chọn tất cả", key="btn_sel_all"):
-            st.session_state["selected_docs"] = set(filenames_set)
-            for d in docs:
-                st.session_state[f"doc_cb_{d['document_id']}"] = True
-            st.rerun()
-    with col_none:
-        if st.button("Bỏ chọn tất cả", key="btn_sel_none"):
-            st.session_state["selected_docs"] = set()
-            for d in docs:
-                st.session_state[f"doc_cb_{d['document_id']}"] = False
-            st.rerun()
-
-    container = st.sidebar.container(height=300) if len(docs) > 10 else st.sidebar
-
-    new_selected: set[str] = set()
-    for d in docs:
-        cb_key = f"doc_cb_{d['document_id']}"
-        if cb_key not in st.session_state:
-            st.session_state[cb_key] = d["filename"] in selected_docs
-        checked = container.checkbox(d["filename"], key=cb_key)
-        if checked:
-            new_selected.add(d["filename"])
-
-    st.session_state["selected_docs"] = new_selected
-    return sorted(new_selected)
+NAV_ITEMS_BASE = [
+    "💬 Hỏi đáp",
+    "✨ Tóm tắt",
+    "🎯 Quiz",
+    "🃏 Flashcards",
+    "📖 Hướng dẫn",
+]
+NAV_ADMIN_ITEM = "⚙️ Quản lý user"
 
 
-def _sidebar() -> tuple[list[str], int | None]:
+def _sidebar() -> tuple[str, list[str], int | None]:
     user = _current_user()
-    st.sidebar.markdown(f"**Xin chào, `{user['username']}`** ({user['role']})")
-    if st.sidebar.button("Đăng xuất", key="btn_logout"):
-        for key in ("user", "quiz_data", "quiz_answers", "fc_cards", "fc_index", "fc_show_back"):
-            st.session_state.pop(key, None)
-        st.rerun()
 
-    with st.sidebar.expander("Đổi mật khẩu"):
-        old_pw = st.text_input("Mật khẩu cũ", type="password", key="cp_old")
-        new_pw = st.text_input("Mật khẩu mới (≥6 ký tự)", type="password", key="cp_new")
-        if st.button("Cập nhật mật khẩu", key="btn_change_pw"):
-            db_user = auth_service.get_user_by_id(user["id"])
-            if db_user is None or not verify_password(old_pw, db_user.password_hash):
-                st.error("Mật khẩu cũ không đúng.")
-            else:
+    with st.sidebar:
+        st.markdown(_brand_html(), unsafe_allow_html=True)
+
+        st.markdown('<div class="section-label">Chức năng</div>', unsafe_allow_html=True)
+        items = list(NAV_ITEMS_BASE)
+        if _is_admin():
+            items.append(NAV_ADMIN_ITEM)
+        nav = st.radio(
+            "Điều hướng",
+            items,
+            key="nav_choice",
+            label_visibility="collapsed",
+        )
+
+        st.markdown('<div class="section-label">Tài liệu</div>', unsafe_allow_html=True)
+        docs = _list_documents()
+        selected = _doc_checkbox_filter(docs)
+        page_val = st.number_input("Trang (0 = tất cả)", min_value=0, value=0, step=1)
+        page = int(page_val) if page_val > 0 else None
+
+        st.markdown('<div class="section-label">Tải lên</div>', unsafe_allow_html=True)
+        uploaded = st.file_uploader("Chọn file PDF", type=["pdf"], label_visibility="collapsed")
+        if uploaded and st.button("Tải lên", key="btn_upload", type="primary"):
+            with st.spinner("Đang tải lên và index..."):
                 try:
-                    auth_service.change_password(user["id"], new_pw)
-                    st.success("Đã đổi mật khẩu.")
-                except ValueError as e:
-                    st.error(f"Lỗi: {e}")
+                    result = save_and_ingest_pdf(
+                        uploaded.getvalue(),
+                        uploaded.name,
+                        owner_id=user["username"],
+                    )
+                    st.session_state["upload_toast"] = {
+                        "status": "success",
+                        "filename": uploaded.name,
+                        "chunks": result["chunks_indexed"],
+                    }
+                    st.rerun()
+                except Exception as e:
+                    st.session_state["upload_toast"] = {
+                        "status": "error",
+                        "msg": str(e),
+                    }
+                    st.rerun()
 
-    st.sidebar.markdown("---")
-    st.sidebar.title("Bộ lọc")
+        with st.expander("Đổi mật khẩu"):
+            old_pw = st.text_input("Mật khẩu cũ", type="password", key="cp_old")
+            new_pw = st.text_input("Mật khẩu mới (≥6 ký tự)", type="password", key="cp_new")
+            if st.button("Cập nhật mật khẩu", key="btn_change_pw"):
+                db_user = auth_service.get_user_by_id(user["id"])
+                if db_user is None or not verify_password(old_pw, db_user.password_hash):
+                    st.error("Mật khẩu cũ không đúng.")
+                else:
+                    try:
+                        auth_service.change_password(user["id"], new_pw)
+                        st.success("Đã đổi mật khẩu.")
+                    except ValueError as e:
+                        st.error(f"Lỗi: {e}")
 
-    docs = _list_documents()
-    selected = _doc_checkbox_filter(docs)
+        st.markdown(_user_card_html(user), unsafe_allow_html=True)
+        if st.button("Đăng xuất", key="btn_logout"):
+            for key in (
+                "user", "quiz_data", "quiz_answers",
+                "fc_cards", "fc_index", "fc_show_back",
+                "selected_docs", "nav_choice",
+            ):
+                st.session_state.pop(key, None)
+            st.rerun()
 
-    page_val = st.sidebar.number_input("Trang (0 = tất cả)", min_value=0, value=0, step=1)
-    page = int(page_val) if page_val > 0 else None
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Tải tài liệu lên")
-    uploaded = st.sidebar.file_uploader("Chọn file PDF", type=["pdf"])
-    if uploaded and st.sidebar.button("Tải lên"):
-        with st.sidebar.spinner("Đang tải lên và index..."):
-            try:
-                result = save_and_ingest_pdf(
-                    uploaded.getvalue(),
-                    uploaded.name,
-                    owner_id=user["username"],
-                )
-                st.session_state["upload_toast"] = {
-                    "status": "success",
-                    "filename": uploaded.name,
-                    "chunks": result["chunks_indexed"],
-                }
-                st.rerun()
-            except Exception as e:
-                st.session_state["upload_toast"] = {
-                    "status": "error",
-                    "msg": str(e),
-                }
-                st.rerun()
-
-    return selected, page
+    return nav, selected, page
 
 
 # ==========================================
-# Feature tabs
+# Upload toast
 # ==========================================
 
-def _tab_chat(filenames: list[str], page: int | None) -> None:
-    st.header("Hỏi đáp")
-    question = st.text_area(
-        "Câu hỏi của bạn",
-        placeholder="Nhập câu hỏi...",
-        height=120,
-    )
-    k = st.slider("Số chunks truy xuất", min_value=1, max_value=20, value=5)
+def _render_upload_toast() -> None:
+    toast = st.session_state.pop("upload_toast", None)
+    if not toast:
+        return
+    if toast.get("status") == "success":
+        msg = f"Đã index {toast['chunks']} chunks từ '{toast['filename']}'"
+        st.toast(msg, icon="✅")
+        st.success(msg)
+    else:
+        msg = f"Tải lên thất bại: {toast.get('msg', '')}"
+        st.toast(msg, icon="❌")
+        st.error(msg)
 
-    if st.button("Hỏi", key="btn_ask") and question:
+
+# ==========================================
+# Feature views
+# ==========================================
+
+def _view_chat(filenames: list[str], page: int | None) -> None:
+    _page_header("Hỏi đáp", "Đặt câu hỏi dựa trên nội dung tài liệu đã upload.")
+    _greeting()
+
+    with st.container(border=True):
+        question = st.text_area(
+            "Câu hỏi của bạn",
+            placeholder="Nhập câu hỏi...",
+            height=120,
+        )
+        k = st.slider("Số chunks truy xuất", min_value=1, max_value=20, value=5)
+        ask = st.button("Hỏi", key="btn_ask", type="primary")
+
+    if ask and question:
         with st.spinner("Đang trả lời..."):
             try:
                 result = answer(question, k=k, filters=_build_filters(filenames, page))
@@ -280,14 +590,17 @@ def _tab_chat(filenames: list[str], page: int | None) -> None:
                 st.error(f"Lỗi: {e}")
 
 
-def _tab_summary(filenames: list[str], page: int | None) -> None:
-    st.header("Tóm tắt")
-    query = st.text_area(
-        "Truy vấn tóm tắt (để trống = tóm tắt toàn bộ)",
-        height=120,
-    )
+def _view_summary(filenames: list[str], page: int | None) -> None:
+    _page_header("Tóm tắt", "Tạo bản tóm tắt cho tài liệu đã chọn.")
 
-    if st.button("Tóm tắt", key="btn_summary"):
+    with st.container(border=True):
+        query = st.text_area(
+            "Truy vấn tóm tắt (để trống = tóm tắt toàn bộ)",
+            height=120,
+        )
+        run_btn = st.button("Tóm tắt", key="btn_summary", type="primary")
+
+    if run_btn:
         with st.spinner("Đang tóm tắt..."):
             try:
                 result = summarize_learning(
@@ -307,15 +620,18 @@ def _tab_summary(filenames: list[str], page: int | None) -> None:
                 st.error(f"Lỗi: {e}")
 
 
-def _tab_quiz(filenames: list[str], page: int | None) -> None:
-    st.header("Quiz")
-    query = st.text_area(
-        "Chủ đề quiz (để trống = từ toàn bộ tài liệu)",
-        height=120,
-    )
-    count = st.slider("Số câu hỏi", min_value=1, max_value=20, value=8)
+def _view_quiz(filenames: list[str], page: int | None) -> None:
+    _page_header("Quiz", "Tạo bộ câu hỏi trắc nghiệm từ tài liệu.")
 
-    if st.button("Tạo Quiz", key="btn_quiz"):
+    with st.container(border=True):
+        query = st.text_area(
+            "Chủ đề quiz (để trống = từ toàn bộ tài liệu)",
+            height=120,
+        )
+        count = st.slider("Số câu hỏi", min_value=1, max_value=20, value=8)
+        run_btn = st.button("Tạo Quiz", key="btn_quiz", type="primary")
+
+    if run_btn:
         with st.spinner("Đang tạo quiz..."):
             try:
                 result = generate_quiz(
@@ -346,65 +662,18 @@ def _tab_quiz(filenames: list[str], page: int | None) -> None:
                 st.info(f"Giải thích: {item.explanation}")
 
 
-_GUIDE_PATH = Path(__file__).resolve().parent.parent / "docs" / "user_guide.md"
-_GUIDE_TRIGGERS = (
-    "hướng dẫn sử dụng notebook",
-    "hướng dẫn sử dụng",
-    "hướng dẫn dùng",
-    "cách sử dụng",
-    "cách dùng",
-    "hướng dẫn",
-    "guide",
-    "help",
-)
+def _view_flashcards(filenames: list[str], page: int | None) -> None:
+    _page_header("Flashcards", "Học theo phương pháp thẻ ghi nhớ.")
 
+    with st.container(border=True):
+        query = st.text_area(
+            "Chủ đề flashcard (để trống = từ toàn bộ tài liệu)",
+            height=120,
+        )
+        count = st.slider("Số flashcard", min_value=1, max_value=30, value=15)
+        run_btn = st.button("Tạo Flashcards", key="btn_fc", type="primary")
 
-def _load_user_guide() -> str:
-    try:
-        return _GUIDE_PATH.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return "_Tài liệu hướng dẫn chưa được tạo._"
-
-
-def _is_guide_request(text: str) -> bool:
-    t = text.strip().lower()
-    if not t:
-        return False
-    return any(trigger in t for trigger in _GUIDE_TRIGGERS)
-
-
-def _tab_guide() -> None:
-    st.header("Hướng dẫn sử dụng")
-    guide_md = _load_user_guide()
-    st.markdown(guide_md)
-
-    st.markdown("---")
-    st.subheader("Hỏi nhanh về cách dùng")
-    user_q = st.text_area(
-        "Nhập câu hỏi về cách sử dụng (ví dụ: 'hướng dẫn sử dụng notebook')",
-        key="guide_chat_input",
-        height=120,
-    )
-    if st.button("Gửi", key="btn_guide_ask") and user_q:
-        if _is_guide_request(user_q):
-            st.markdown(guide_md)
-        else:
-            st.info(
-                "Tôi chỉ trả lời các câu hỏi về cách sử dụng ứng dụng ở tab này. "
-                "Hãy thử gõ \"hướng dẫn sử dụng notebook\". "
-                "Nếu bạn muốn hỏi về nội dung tài liệu, vui lòng dùng tab **Hỏi đáp**."
-            )
-
-
-def _tab_flashcards(filenames: list[str], page: int | None) -> None:
-    st.header("Flashcards")
-    query = st.text_area(
-        "Chủ đề flashcard (để trống = từ toàn bộ tài liệu)",
-        height=120,
-    )
-    count = st.slider("Số flashcard", min_value=1, max_value=30, value=15)
-
-    if st.button("Tạo Flashcards", key="btn_fc"):
+    if run_btn:
         with st.spinner("Đang tạo flashcards..."):
             try:
                 result = generate_flashcards(
@@ -447,12 +716,62 @@ def _tab_flashcards(filenames: list[str], page: int | None) -> None:
                 st.rerun()
 
 
-# ==========================================
-# Admin tab — manage users
-# ==========================================
+_GUIDE_PATH = Path(__file__).resolve().parent.parent / "docs" / "user_guide.md"
+_GUIDE_TRIGGERS = (
+    "hướng dẫn sử dụng notebook",
+    "hướng dẫn sử dụng",
+    "hướng dẫn dùng",
+    "cách sử dụng",
+    "cách dùng",
+    "hướng dẫn",
+    "guide",
+    "help",
+)
 
-def _tab_admin_users() -> None:
-    st.header("Quản lý user")
+
+def _load_user_guide() -> str:
+    try:
+        return _GUIDE_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return "_Tài liệu hướng dẫn chưa được tạo._"
+
+
+def _is_guide_request(text: str) -> bool:
+    t = text.strip().lower()
+    if not t:
+        return False
+    return any(trigger in t for trigger in _GUIDE_TRIGGERS)
+
+
+def _view_guide() -> None:
+    _page_header("Hướng dẫn sử dụng", "Tài liệu và mẹo dùng VinLM hiệu quả.")
+    guide_md = _load_user_guide()
+    with st.container(border=True):
+        st.markdown(guide_md)
+
+    st.markdown("---")
+    st.subheader("Hỏi nhanh về cách dùng")
+    with st.container(border=True):
+        user_q = st.text_area(
+            "Nhập câu hỏi về cách sử dụng (ví dụ: 'hướng dẫn sử dụng notebook')",
+            key="guide_chat_input",
+            height=120,
+        )
+        send = st.button("Gửi", key="btn_guide_ask", type="primary")
+
+    if send and user_q:
+        if _is_guide_request(user_q):
+            st.markdown(guide_md)
+        else:
+            st.info(
+                "Tôi chỉ trả lời các câu hỏi về cách sử dụng ứng dụng ở mục này. "
+                "Hãy thử gõ \"hướng dẫn sử dụng notebook\". "
+                "Nếu bạn muốn hỏi về nội dung tài liệu, vui lòng dùng mục **Hỏi đáp**."
+            )
+
+
+def _view_admin_users() -> None:
+    _page_header("Quản lý user", "Tạo, sửa, vô hiệu hóa, xóa người dùng (chỉ admin).")
     current = _current_user() or {}
 
     users = auth_service.list_users()
@@ -476,12 +795,13 @@ def _tab_admin_users() -> None:
 
     st.markdown("---")
     st.subheader("Tạo user mới")
-    with st.form("admin_create_user"):
-        c_username = st.text_input("Tên đăng nhập", key="adm_new_username")
-        c_email = st.text_input("Email (tùy chọn)", key="adm_new_email")
-        c_password = st.text_input("Mật khẩu", type="password", key="adm_new_password")
-        c_role = st.selectbox("Role", ["user", "admin"], index=0, key="adm_new_role")
-        c_submit = st.form_submit_button("Tạo user")
+    with st.container(border=True):
+        with st.form("admin_create_user"):
+            c_username = st.text_input("Tên đăng nhập", key="adm_new_username")
+            c_email = st.text_input("Email (tùy chọn)", key="adm_new_email")
+            c_password = st.text_input("Mật khẩu", type="password", key="adm_new_password")
+            c_role = st.selectbox("Role", ["user", "admin"], index=0, key="adm_new_role")
+            c_submit = st.form_submit_button("Tạo user", type="primary")
     if c_submit:
         try:
             auth_service.create_user(
@@ -555,18 +875,14 @@ def _tab_admin_users() -> None:
 # Entry point
 # ==========================================
 
-def _render_upload_toast() -> None:
-    toast = st.session_state.pop("upload_toast", None)
-    if not toast:
-        return
-    if toast.get("status") == "success":
-        msg = f"Đã index {toast['chunks']} chunks từ '{toast['filename']}'"
-        st.toast(msg, icon="✅")
-        st.success(msg)
-    else:
-        msg = f"Tải lên thất bại: {toast.get('msg', '')}"
-        st.toast(msg, icon="❌")
-        st.error(msg)
+VIEW_DISPATCH = {
+    "💬 Hỏi đáp": "chat",
+    "✨ Tóm tắt": "summary",
+    "🎯 Quiz": "quiz",
+    "🃏 Flashcards": "flashcards",
+    "📖 Hướng dẫn": "guide",
+    "⚙️ Quản lý user": "admin",
+}
 
 
 def run():
@@ -576,31 +892,25 @@ def run():
         _login_page()
         return
 
-    st.set_page_config(page_title="RAG Learning System", layout="wide")
+    st.set_page_config(page_title="VinLM — RAG Learning", layout="wide")
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
-    filenames, page = _sidebar()
+    nav, filenames, page = _sidebar()
     _render_upload_toast()
 
-    tab_labels = ["Hỏi đáp", "Tóm tắt", "Quiz", "Flashcards", "Hướng dẫn"]
-    if _is_admin():
-        tab_labels.append("Quản lý user")
-
-    tabs = st.tabs(tab_labels)
-
-    with tabs[0]:
-        _tab_chat(filenames, page)
-    with tabs[1]:
-        _tab_summary(filenames, page)
-    with tabs[2]:
-        _tab_quiz(filenames, page)
-    with tabs[3]:
-        _tab_flashcards(filenames, page)
-    with tabs[4]:
-        _tab_guide()
-    if _is_admin():
-        with tabs[5]:
-            _tab_admin_users()
+    view = VIEW_DISPATCH.get(nav, "chat")
+    if view == "chat":
+        _view_chat(filenames, page)
+    elif view == "summary":
+        _view_summary(filenames, page)
+    elif view == "quiz":
+        _view_quiz(filenames, page)
+    elif view == "flashcards":
+        _view_flashcards(filenames, page)
+    elif view == "guide":
+        _view_guide()
+    elif view == "admin" and _is_admin():
+        _view_admin_users()
 
 
 run()
