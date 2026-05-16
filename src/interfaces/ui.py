@@ -306,6 +306,27 @@ def _list_documents_of(username: str) -> list[dict]:
     return list(seen.values())
 
 
+def _list_all_documents_with_owner() -> list[dict]:
+    """Admin view: every doc in store, grouped by document_id with owner + chunk count."""
+    try:
+        chunks = fetch_all_chunks(filters=None)
+    except Exception:
+        return []
+    seen: dict[str, dict] = {}
+    for chunk in chunks:
+        doc_id = chunk.metadata.document_id
+        if doc_id not in seen:
+            seen[doc_id] = {
+                "document_id": doc_id,
+                "filename": chunk.metadata.filename,
+                "owner_id": chunk.metadata.owner_id or "(unknown)",
+                "chunk_count": 1,
+            }
+        else:
+            seen[doc_id]["chunk_count"] += 1
+    return list(seen.values())
+
+
 def _build_filters(filenames: list[str], page: int | None) -> dict | None:
     f: dict = dict(_owner_filter())
     if filenames:
@@ -1017,6 +1038,91 @@ def _view_dashboard() -> None:
         df_day = pd.DataFrame(per_day, columns=["ngày", "số câu hỏi"])
         df_day["ngày"] = pd.to_datetime(df_day["ngày"])
         st.line_chart(df_day.set_index("ngày"))
+
+    st.markdown("---")
+
+    st.subheader("📄 Tài liệu của từng user")
+    all_docs = _list_all_documents_with_owner()
+    if not all_docs:
+        st.info("Chưa có tài liệu nào trong hệ thống.")
+    else:
+        all_docs.sort(key=lambda d: (d["owner_id"], d["filename"]))
+        from collections import Counter
+        docs_per_user = Counter(d["owner_id"] for d in all_docs)
+        st.caption(
+            f"Tổng: {len(all_docs)} tài liệu từ {len(docs_per_user)} user."
+        )
+        doc_users = sorted(docs_per_user.keys())
+        doc_filter = st.selectbox(
+            "Lọc theo user",
+            ["(tất cả)"] + doc_users,
+            key="dash_doc_user_filter",
+        )
+        shown_docs = (
+            all_docs if doc_filter == "(tất cả)"
+            else [d for d in all_docs if d["owner_id"] == doc_filter]
+        )
+        st.dataframe(
+            [
+                {
+                    "user": d["owner_id"],
+                    "filename": d["filename"],
+                    "document_id": d["document_id"],
+                    "số chunks": d["chunk_count"],
+                }
+                for d in shown_docs
+            ],
+            use_container_width=True,
+        )
+
+    st.markdown("---")
+
+    st.subheader("❓ Câu hỏi của từng user")
+    if not all_logs:
+        st.info("Chưa có câu hỏi nào.")
+    else:
+        q_users = sorted({log.username for log in all_logs})
+        q_filter = st.selectbox(
+            "Lọc theo user",
+            ["(tất cả)"] + q_users,
+            key="dash_q_user_filter",
+        )
+        filtered_logs = (
+            all_logs if q_filter == "(tất cả)"
+            else [log for log in all_logs if log.username == q_filter]
+        )
+        st.caption(f"Hiển thị {len(filtered_logs)} / {len(all_logs)} câu hỏi.")
+        if filtered_logs:
+            rows = [
+                {
+                    "thời gian": log.created_at.isoformat(sep=" ", timespec="seconds"),
+                    "user": log.username,
+                    "câu hỏi": log.question,
+                    "preview trả lời": (log.answer_preview or "")[:200],
+                    "k": log.k,
+                    "filter file": log.filenames or "(tất cả)",
+                    "trang": log.page_filter or "",
+                    "thành công": "✅" if log.success else "❌",
+                    "lỗi": log.error_message or "",
+                }
+                for log in filtered_logs
+            ]
+            st.dataframe(rows, use_container_width=True)
+
+            buf = io.StringIO()
+            writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+            st.download_button(
+                label="⬇️ Export CSV",
+                data=buf.getvalue().encode("utf-8-sig"),
+                file_name=(
+                    f"questions_{q_filter if q_filter != '(tất cả)' else 'all'}"
+                    f"_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+                ),
+                mime="text/csv",
+                key="dash_export_csv_all",
+            )
 
 
 # ==========================================
