@@ -22,13 +22,15 @@ Trước khi sử dụng VinLM, bạn phải có tài khoản và đăng nhập.
 3. Nhấn **Tải lên**. Hệ thống sẽ tự động chia tài liệu thành các đoạn nhỏ (chunks) và đánh chỉ mục vào vector database.
 4. Khi thấy thông báo `Đã index N chunks`, tài liệu đã sẵn sàng để dùng.
 
-> 💡 Bạn có thể tải nhiều file PDF. Dùng mục **Chọn tài liệu** ở sidebar để lọc theo file cụ thể, hoặc để trống để dùng tất cả.
+> 💡 Bạn có thể tải nhiều file PDF. Ở sidebar có danh sách **Chọn tài liệu** dạng checkbox — tick chọn từng file để lọc, hoặc dùng nút **Chọn tất cả** / **Bỏ chọn tất cả**. Nếu không tick file nào, mặc định dùng toàn bộ tài liệu bạn có quyền truy cập.
+>
+> ℹ️ Khi tải PDF lên thành công, bạn sẽ thấy thông báo xanh "Đã index N chunks từ '<tên file>'" ở đầu trang chính và một toast nhỏ — không cần đoán mò xem upload đã xong chưa.
 
 ## 2. Tab "Hỏi đáp"
 
 Đặt câu hỏi liên quan đến nội dung tài liệu.
 
-- **Câu hỏi của bạn**: nhập câu hỏi bằng tiếng Việt.
+- **Câu hỏi của bạn**: ô nhập câu hỏi nhiều dòng — gõ `Enter` để xuống dòng, đặt câu hỏi dài tùy ý bằng tiếng Việt. Hệ thống chỉ chạy khi bạn bấm nút **Hỏi**.
 - **Số chunks truy xuất**: số đoạn văn bản được truy xuất để tham khảo (mặc định 5). Tăng giá trị nếu câu hỏi cần ngữ cảnh rộng.
 - Nhấn **Hỏi**. Câu trả lời sẽ kèm trích dẫn nguồn `[S1], [S2]...` — mở **Nguồn trích dẫn** để xem chi tiết file và trang.
 

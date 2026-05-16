@@ -154,6 +154,48 @@ def _login_page() -> None:
                     st.error(f"Đăng ký thất bại: {e}")
 
 
+def _doc_checkbox_filter(docs: list[dict]) -> list[str]:
+    """Render filter checkboxes in the sidebar. Returns the list of selected filenames."""
+    st.sidebar.markdown("### Chọn tài liệu")
+
+    if not docs:
+        st.sidebar.caption("Chưa có tài liệu. Hãy upload PDF ở mục bên dưới.")
+        st.session_state["selected_docs"] = set()
+        return []
+
+    filenames_set = {d["filename"] for d in docs}
+    selected_docs: set[str] = st.session_state.get("selected_docs", set()) & filenames_set
+    st.session_state["selected_docs"] = selected_docs
+
+    col_all, col_none = st.sidebar.columns(2)
+    with col_all:
+        if st.button("Chọn tất cả", key="btn_sel_all"):
+            st.session_state["selected_docs"] = set(filenames_set)
+            for d in docs:
+                st.session_state[f"doc_cb_{d['document_id']}"] = True
+            st.rerun()
+    with col_none:
+        if st.button("Bỏ chọn tất cả", key="btn_sel_none"):
+            st.session_state["selected_docs"] = set()
+            for d in docs:
+                st.session_state[f"doc_cb_{d['document_id']}"] = False
+            st.rerun()
+
+    container = st.sidebar.container(height=300) if len(docs) > 10 else st.sidebar
+
+    new_selected: set[str] = set()
+    for d in docs:
+        cb_key = f"doc_cb_{d['document_id']}"
+        if cb_key not in st.session_state:
+            st.session_state[cb_key] = d["filename"] in selected_docs
+        checked = container.checkbox(d["filename"], key=cb_key)
+        if checked:
+            new_selected.add(d["filename"])
+
+    st.session_state["selected_docs"] = new_selected
+    return sorted(new_selected)
+
+
 def _sidebar() -> tuple[list[str], int | None]:
     user = _current_user()
     st.sidebar.markdown(f"**Xin chào, `{user['username']}`** ({user['role']})")
@@ -180,8 +222,7 @@ def _sidebar() -> tuple[list[str], int | None]:
     st.sidebar.title("Bộ lọc")
 
     docs = _list_documents()
-    filenames = [d["filename"] for d in docs]
-    selected = st.sidebar.multiselect("Chọn tài liệu", filenames)
+    selected = _doc_checkbox_filter(docs)
 
     page_val = st.sidebar.number_input("Trang (0 = tất cả)", min_value=0, value=0, step=1)
     page = int(page_val) if page_val > 0 else None
@@ -197,10 +238,18 @@ def _sidebar() -> tuple[list[str], int | None]:
                     uploaded.name,
                     owner_id=user["username"],
                 )
-                st.sidebar.success(f"Đã index {result['chunks_indexed']} chunks")
+                st.session_state["upload_toast"] = {
+                    "status": "success",
+                    "filename": uploaded.name,
+                    "chunks": result["chunks_indexed"],
+                }
                 st.rerun()
             except Exception as e:
-                st.sidebar.error(f"Tải lên thất bại: {e}")
+                st.session_state["upload_toast"] = {
+                    "status": "error",
+                    "msg": str(e),
+                }
+                st.rerun()
 
     return selected, page
 
@@ -211,7 +260,11 @@ def _sidebar() -> tuple[list[str], int | None]:
 
 def _tab_chat(filenames: list[str], page: int | None) -> None:
     st.header("Hỏi đáp")
-    question = st.text_input("Câu hỏi của bạn", placeholder="Nhập câu hỏi...")
+    question = st.text_area(
+        "Câu hỏi của bạn",
+        placeholder="Nhập câu hỏi...",
+        height=120,
+    )
     k = st.slider("Số chunks truy xuất", min_value=1, max_value=20, value=5)
 
     if st.button("Hỏi", key="btn_ask") and question:
@@ -229,7 +282,10 @@ def _tab_chat(filenames: list[str], page: int | None) -> None:
 
 def _tab_summary(filenames: list[str], page: int | None) -> None:
     st.header("Tóm tắt")
-    query = st.text_input("Truy vấn tóm tắt (để trống = tóm tắt toàn bộ)")
+    query = st.text_area(
+        "Truy vấn tóm tắt (để trống = tóm tắt toàn bộ)",
+        height=120,
+    )
 
     if st.button("Tóm tắt", key="btn_summary"):
         with st.spinner("Đang tóm tắt..."):
@@ -253,7 +309,10 @@ def _tab_summary(filenames: list[str], page: int | None) -> None:
 
 def _tab_quiz(filenames: list[str], page: int | None) -> None:
     st.header("Quiz")
-    query = st.text_input("Chủ đề quiz (để trống = từ toàn bộ tài liệu)")
+    query = st.text_area(
+        "Chủ đề quiz (để trống = từ toàn bộ tài liệu)",
+        height=120,
+    )
     count = st.slider("Số câu hỏi", min_value=1, max_value=20, value=8)
 
     if st.button("Tạo Quiz", key="btn_quiz"):
@@ -321,9 +380,10 @@ def _tab_guide() -> None:
 
     st.markdown("---")
     st.subheader("Hỏi nhanh về cách dùng")
-    user_q = st.text_input(
+    user_q = st.text_area(
         "Nhập câu hỏi về cách sử dụng (ví dụ: 'hướng dẫn sử dụng notebook')",
         key="guide_chat_input",
+        height=120,
     )
     if st.button("Gửi", key="btn_guide_ask") and user_q:
         if _is_guide_request(user_q):
@@ -338,7 +398,10 @@ def _tab_guide() -> None:
 
 def _tab_flashcards(filenames: list[str], page: int | None) -> None:
     st.header("Flashcards")
-    query = st.text_input("Chủ đề flashcard (để trống = từ toàn bộ tài liệu)")
+    query = st.text_area(
+        "Chủ đề flashcard (để trống = từ toàn bộ tài liệu)",
+        height=120,
+    )
     count = st.slider("Số flashcard", min_value=1, max_value=30, value=15)
 
     if st.button("Tạo Flashcards", key="btn_fc"):
@@ -492,6 +555,20 @@ def _tab_admin_users() -> None:
 # Entry point
 # ==========================================
 
+def _render_upload_toast() -> None:
+    toast = st.session_state.pop("upload_toast", None)
+    if not toast:
+        return
+    if toast.get("status") == "success":
+        msg = f"Đã index {toast['chunks']} chunks từ '{toast['filename']}'"
+        st.toast(msg, icon="✅")
+        st.success(msg)
+    else:
+        msg = f"Tải lên thất bại: {toast.get('msg', '')}"
+        st.toast(msg, icon="❌")
+        st.error(msg)
+
+
 def run():
     ensure_seed_admin()
 
@@ -503,6 +580,7 @@ def run():
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
     filenames, page = _sidebar()
+    _render_upload_toast()
 
     tab_labels = ["Hỏi đáp", "Tóm tắt", "Quiz", "Flashcards", "Hướng dẫn"]
     if _is_admin():
