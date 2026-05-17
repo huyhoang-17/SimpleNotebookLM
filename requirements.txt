@@ -46,5 +46,11 @@ python-jose[cryptography]>=3.3
 sqlmodel>=0.0.22
 python-multipart>=0.0.9
 
+# Database migrations & optional PostgreSQL driver
+alembic>=1.13
+# PostgreSQL is opt-in via RAG_DB_URL=postgresql+psycopg://...
+# Install only if you actually use Postgres:
+#   pip install "psycopg[binary]>=3.1"
+
 # Evaluation dependencies are in requirements-eval.txt
 # Install separately: pip install -r requirements-eval.txt

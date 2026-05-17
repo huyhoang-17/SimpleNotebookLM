@@ -7,7 +7,8 @@ from typing import Optional
 from sqlmodel import delete, select
 
 from ..config import settings
-from .db import init_db, session
+from ..db.engine import init_db, session
+from ..db.migrate import run_migrations
 from .models import QuestionLog, User
 from .security import hash_password, verify_password
 
@@ -159,7 +160,7 @@ def log_question(
     page_filter: Optional[int] = None,
     success: bool = True,
     error_message: Optional[str] = None,
-) -> None:
+) -> int:
     log = QuestionLog(
         user_id=user_id,
         username=username,
@@ -174,6 +175,8 @@ def log_question(
     with session() as s:
         s.add(log)
         s.commit()
+        s.refresh(log)
+        return int(log.id)  # type: ignore[arg-type]
 
 
 def list_questions_by_user(user_id: int, limit: int = 200) -> list[QuestionLog]:
@@ -247,7 +250,14 @@ def success_rate() -> tuple[int, int]:
 
 
 def ensure_seed_admin() -> None:
-    init_db()
+    if settings.db_auto_migrate:
+        try:
+            run_migrations()
+        except Exception as e:
+            logger.warning("Alembic migration failed, falling back to create_all: %s", e)
+            init_db()
+    else:
+        init_db()
     with session() as s:
         existing = s.exec(select(User)).first()
     if existing is not None:

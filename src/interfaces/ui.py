@@ -29,6 +29,8 @@ for _k, _v in _streamlit_secrets.items():
 from src.auth import service as auth_service
 from src.auth.security import verify_password
 from src.auth.service import ensure_seed_admin
+from src.db.repositories import CitationRepo, DocumentRepo, IngestionRepo
+from src.documents_service import delete_document
 from src.indexing import save_and_ingest_pdf
 from src.interfaces import session as session_mod
 from src.learning import generate_flashcards, generate_quiz
@@ -272,60 +274,57 @@ def _owner_filter() -> dict:
 # ==========================================
 
 def _list_documents() -> list[dict]:
+    user = _current_user()
+    if not user:
+        return []
     try:
-        chunks = fetch_all_chunks(filters=_owner_filter() or None)
+        if user.get("role") == "admin":
+            docs = DocumentRepo.list_all()
+        else:
+            docs = DocumentRepo.list_by_owner(user["id"])
     except Exception:
         return []
-    seen: dict[str, dict] = {}
-    for chunk in chunks:
-        doc_id = chunk.metadata.document_id
-        if doc_id not in seen:
-            seen[doc_id] = {
-                "document_id": doc_id,
-                "filename": chunk.metadata.filename,
-                "owner_id": chunk.metadata.owner_id,
-            }
-    return list(seen.values())
+    return [
+        {
+            "document_id": d.document_id,
+            "filename": d.filename,
+            "owner_id": d.owner_username,
+            "chunk_count": d.chunk_count,
+        }
+        for d in docs
+    ]
 
 
 def _list_documents_of(username: str) -> list[dict]:
     try:
-        chunks = fetch_all_chunks(filters={"owner_id": username})
+        docs = DocumentRepo.list_by_owner_username(username)
     except Exception:
         return []
-    seen: dict[str, dict] = {}
-    for chunk in chunks:
-        doc_id = chunk.metadata.document_id
-        if doc_id not in seen:
-            seen[doc_id] = {
-                "document_id": doc_id,
-                "filename": chunk.metadata.filename,
-                "chunk_count": 1,
-            }
-        else:
-            seen[doc_id]["chunk_count"] += 1
-    return list(seen.values())
+    return [
+        {
+            "document_id": d.document_id,
+            "filename": d.filename,
+            "chunk_count": d.chunk_count,
+        }
+        for d in docs
+    ]
 
 
 def _list_all_documents_with_owner() -> list[dict]:
-    """Admin view: every doc in store, grouped by document_id with owner + chunk count."""
+    """Admin view: every active doc in DB with owner + chunk count."""
     try:
-        chunks = fetch_all_chunks(filters=None)
+        docs = DocumentRepo.list_all()
     except Exception:
         return []
-    seen: dict[str, dict] = {}
-    for chunk in chunks:
-        doc_id = chunk.metadata.document_id
-        if doc_id not in seen:
-            seen[doc_id] = {
-                "document_id": doc_id,
-                "filename": chunk.metadata.filename,
-                "owner_id": chunk.metadata.owner_id or "(unknown)",
-                "chunk_count": 1,
-            }
-        else:
-            seen[doc_id]["chunk_count"] += 1
-    return list(seen.values())
+    return [
+        {
+            "document_id": d.document_id,
+            "filename": d.filename,
+            "owner_id": d.owner_username or "(unknown)",
+            "chunk_count": d.chunk_count,
+        }
+        for d in docs
+    ]
 
 
 def _build_filters(filenames: list[str], page: int | None) -> dict | None:
@@ -365,14 +364,47 @@ def _doc_checkbox_filter(docs: list[dict]) -> list[str]:
     container = st.container(height=240) if len(docs) > 6 else st.container()
 
     new_selected: set[str] = set()
+    pending_delete = st.session_state.get("pending_delete_doc")
     with container:
         for d in docs:
             cb_key = f"doc_cb_{d['document_id']}"
             if cb_key not in st.session_state:
                 st.session_state[cb_key] = d["filename"] in selected_docs
-            checked = st.checkbox(d["filename"], key=cb_key)
+            col_cb, col_del = st.columns([0.85, 0.15])
+            with col_cb:
+                checked = st.checkbox(d["filename"], key=cb_key)
+            with col_del:
+                if st.button("🗑️", key=f"del_doc_{d['document_id']}", help="Xóa tài liệu"):
+                    st.session_state["pending_delete_doc"] = d
+                    st.rerun()
             if checked:
                 new_selected.add(d["filename"])
+
+    if pending_delete:
+        target = pending_delete
+        st.warning(f"Xác nhận xóa **{target['filename']}**? Hành động này không thể hoàn tác.")
+        col_ok, col_cancel = st.columns(2)
+        with col_ok:
+            if st.button("Xóa", key="confirm_del_doc", type="primary"):
+                user = _current_user() or {}
+                try:
+                    summary = delete_document(
+                        document_id=target["document_id"],
+                        requester_user_id=user.get("id"),
+                        requester_role=user.get("role", "user"),
+                    )
+                    st.session_state["pending_delete_doc"] = None
+                    st.toast(
+                        f"Đã xóa '{summary['filename']}' ({summary['points_deleted']} chunks).",
+                        icon="🗑️",
+                    )
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Lỗi xóa: {e}")
+        with col_cancel:
+            if st.button("Hủy", key="cancel_del_doc"):
+                st.session_state["pending_delete_doc"] = None
+                st.rerun()
 
     st.session_state["selected_docs"] = new_selected
     return sorted(new_selected)
@@ -552,6 +584,7 @@ def _sidebar() -> tuple[str, list[str], int | None]:
                         uploaded.getvalue(),
                         uploaded.name,
                         owner_id=user["username"],
+                        owner_user_id=user["id"],
                     )
                     st.session_state["upload_toast"] = {
                         "status": "success",
@@ -642,7 +675,7 @@ def _view_chat(filenames: list[str], page: int | None) -> None:
                         for c in result.citations:
                             st.write(f"**{c.source_marker}**: {c.filename}, trang {c.page}")
                 if user.get("id") is not None:
-                    auth_service.log_question(
+                    qlog_id = auth_service.log_question(
                         user_id=user["id"],
                         username=user["username"],
                         question=question,
@@ -652,6 +685,11 @@ def _view_chat(filenames: list[str], page: int | None) -> None:
                         page_filter=page,
                         success=True,
                     )
+                    if result.citations:
+                        try:
+                            CitationRepo.bulk_create_for_question(qlog_id, result.citations)
+                        except Exception:
+                            pass
             except Exception as e:
                 st.error(f"Lỗi: {e}")
                 if user.get("id") is not None:
@@ -1033,6 +1071,26 @@ def _view_admin_users() -> None:
                 use_container_width=True,
             )
 
+    with st.expander("🕒 Lịch sử ingest", expanded=False):
+        jobs = IngestionRepo.list_recent(owner_id=target.id, limit=50)
+        if not jobs:
+            st.info("Chưa có lần ingest nào.")
+        else:
+            st.dataframe(
+                [
+                    {
+                        "thời gian": j.started_at.isoformat(sep=" ", timespec="seconds"),
+                        "filename": j.filename,
+                        "status": j.status,
+                        "chunks": j.chunks_indexed,
+                        "lỗi": (j.error_message or "")[:160],
+                        "finished": j.finished_at.isoformat(sep=" ", timespec="seconds") if j.finished_at else "",
+                    }
+                    for j in jobs
+                ],
+                use_container_width=True,
+            )
+
     with st.expander("❓ Câu hỏi đã hỏi (Hỏi đáp)", expanded=False):
         logs = auth_service.list_questions_by_user(target.id, limit=200)
         total = auth_service.count_questions_by_user(target.id)
@@ -1081,11 +1139,13 @@ def _view_dashboard() -> None:
     success_count, error_count = auth_service.success_rate()
     success_pct = (100.0 * success_count / total_q) if total_q else 0.0
 
-    c1, c2, c3, c4 = st.columns(4)
+    total_docs = DocumentRepo.count_active()
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Tổng user", total_users)
-    c2.metric("Tổng câu hỏi", total_q)
-    c3.metric("Thành công", f"{success_count} ({success_pct:.1f}%)")
-    c4.metric("Lỗi", error_count)
+    c2.metric("Tổng tài liệu", total_docs)
+    c3.metric("Tổng câu hỏi", total_q)
+    c4.metric("Thành công", f"{success_count} ({success_pct:.1f}%)")
+    c5.metric("Lỗi", error_count)
 
     st.markdown("---")
 

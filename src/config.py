@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,7 +40,12 @@ class Settings(BaseSettings):
     flashcards_default_count: int = Field(default=15, ge=1, le=100)
     api_url: str = "http://localhost:8000"
 
-    auth_db_path: Path = Path("storage/auth.db")
+    app_db_path: Path = Field(
+        default=Path("storage/auth.db"),
+        validation_alias=AliasChoices("RAG_APP_DB_PATH", "RAG_AUTH_DB_PATH"),
+    )
+    db_url: str | None = None
+    db_auto_migrate: bool = True
     jwt_secret: str = "change-me-in-production"
     jwt_expires_min: int = Field(default=60 * 24, ge=1)
     jwt_algorithm: str = "HS256"
